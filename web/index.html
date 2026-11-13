@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>YOLO Dataset</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <h1>YOLO Dataset Builder</h1>
+      <p class="subtitle">อัปโหลด ZIP เพื่อแบ่ง train/val/test</p>
+    </div>
+    <nav>
+      <a href="/projects.html">Projects</a>
+      <a href="/annotate.html">Annotation Studio</a>
+      <a href="/trash.html">ถังขยะ</a>
+    </nav>
+  </header>
+
+  <form id="upload-form">
+    <input type="file" name="file" accept=".zip" required>
+    <label>Train <input type="number" name="train_ratio" value="0.7" step="0.05"></label>
+    <label>Val <input type="number" name="val_ratio" value="0.2" step="0.05"></label>
+    <label>Test <input type="number" name="test_ratio" value="0.1" step="0.05"></label>
+    <button>อัปโหลด</button>
+  </form>
+  <p id="msg"></p>
+
+  <section id="summary" class="cards" hidden>
+    <div class="card">
+      <span class="card-label">Dataset ทั้งหมด</span>
+      <strong id="sum-datasets">0</strong>
+    </div>
+    <div class="card">
+      <span class="card-label">รูปทั้งหมด</span>
+      <strong id="sum-images">0</strong>
+    </div>
+    <div class="card">
+      <span class="card-label">Train / Val / Test</span>
+      <strong id="sum-splits">0 / 0 / 0</strong>
+    </div>
+    <div class="card">
+      <span class="card-label">รูปที่ไม่มี label</span>
+      <strong id="sum-skipped">0</strong>
+    </div>
+  </section>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>ไฟล์</th>
+          <th>รูป</th>
+          <th>Train / Val / Test</th>
+          <th>คลาส</th>
+          <th>ข้าม</th>
+          <th>สร้างเมื่อ</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="list"></tbody>
+    </table>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

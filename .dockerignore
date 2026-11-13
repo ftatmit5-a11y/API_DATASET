@@ -1,0 +1,34 @@
+# Keep the build context small and reproducible. The Go binary embeds the
+# files in web/, so those must stay in the context.
+
+.git
+.gitignore
+.github
+.idea
+.vscode
+
+# Runtime data must never be baked into an image.
+data/
+*.db
+*.db-shm
+*.db-wal
+
+bin/
+dist/
+coverage.out
+coverage.html
+*.test
+*.exe
+*.exe~
+*.log
+
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+.dockerignore
+README.md
+LICENSE
+bruno/
+scripts/
+.env
+.env.*

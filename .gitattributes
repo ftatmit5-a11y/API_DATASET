@@ -1,0 +1,45 @@
+# Normalize line endings so the CI "check formatting" step (gofmt -l) behaves
+# the same on Windows, Linux, and macOS checkouts. Go refuses CRLF in source.
+
+* text=auto
+
+# Source and config that must stay LF everywhere.
+*.go       text eol=lf
+*.mod      text eol=lf
+*.sum      text eol=lf
+*.js       text eol=lf
+*.mjs      text eol=lf
+*.json     text eol=lf
+*.html     text eol=lf
+*.css      text eol=lf
+*.md       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.sh       text eol=lf
+*.bru      text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf
+LICENSE    text eol=lf
+
+# Windows helpers may legitimately use CRLF.
+*.ps1      text eol=crlf
+*.cmd      text eol=crlf
+*.bat      text eol=crlf
+
+# Never touch binary content (uploads, sample datasets, built tools).
+*.zip   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.bmp   binary
+*.tif   binary
+*.tiff  binary
+*.db    binary
+*.exe   binary
+*.dll   binary
+*.so    binary
+*.dylib binary

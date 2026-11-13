@@ -1,0 +1,11 @@
+meta {
+  name: Delete Dataset
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/api/datasets/{{datasetId}}
+  body: none
+  auth: none
+}

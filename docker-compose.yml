@@ -1,0 +1,47 @@
+# Local/dev stack for the YOLO Dataset API.
+#
+#   docker compose up --build     then open http://localhost:8080
+#   docker compose down           keeps the data volume
+#
+# The annotation workspace, uploaded images, and SQLite database all live in
+# DATA_DIR (/data in the container), which is persisted in the yolo-data volume.
+
+name: yolo-api
+
+services:
+  yoloapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-unknown}
+        SOURCE_REPO: ${SOURCE_REPO:-local/yoloapi}
+    image: yoloapi:${VERSION:-dev}
+    container_name: yoloapi
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      ADDR: ":8080"
+      DATA_DIR: /data
+      MAX_UPLOAD_MB: "${MAX_UPLOAD_MB:-512}"
+    volumes:
+      - yolo-data:/data
+      # Want to keep using an existing ./data folder from a local run? Create
+      # docker-compose.override.yml (git-ignored) with:
+      #   services:
+      #     yoloapi:
+      #       volumes:
+      #         - ./data:/data
+      # On Linux the folder must be writable by uid 10001:
+      #   sudo chown -R 10001:10001 ./data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  yolo-data:

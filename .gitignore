@@ -1,0 +1,37 @@
+# Data written by the server at runtime: SQLite database, WAL/SHM side files,
+# uploaded images, generated datasets, and job folders. Never commit these.
+/data/
+
+# Local build output (go build -o bin/..., CI artifacts)
+/bin/
+/dist/
+/coverage/
+coverage.out
+coverage.html
+
+# Go test and tooling leftovers
+*.test
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.prof
+*.out
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Secrets and local environment overrides
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+
+# Scratch folders used by the web asset checks
+/node_modules/

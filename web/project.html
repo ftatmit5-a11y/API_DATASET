@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1 id="project-name">Project</h1>
+      <p class="subtitle" id="project-subtitle">กำลังโหลด...</p>
+    </div>
+    <nav>
+      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
+      <a href="/projects.html">← Projects</a>
+      <a href="/trash.html">ถังขยะ</a>
+      <a href="/">Dataset Builder</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel project-head-panel">
+      <div class="section-head">
+        <h2>รูปใน project</h2>
+        <div class="toolbar-right">
+          <label class="upload-btn" id="upload-label">
+            + เพิ่มรูป
+            <input id="image-input" type="file" accept="image/*" multiple hidden>
+          </label>
+          <button id="make-data" type="button" class="primary-btn">ทำ data (ZIP)</button>
+        </div>
+      </div>
+
+      <div class="project-stats-row">
+        <span class="chip owner-chip" id="project-owner">เจ้าของ: -</span>
+        <span class="chip" id="stat-images">0 รูป</span>
+        <span class="chip" id="stat-boxes">0 boxes</span>
+        <span class="chip" id="stat-classes">0 classes</span>
+      </div>
+
+      <div id="class-chips" class="class-chips"></div>
+      <p class="hint">คลิกรูปเพื่อวาด bounding box · เพิ่มรูปได้เรื่อยๆ แล้วค่อยกด “ทำ data” ตอนพร้อม</p>
+    </section>
+
+    <div id="drop-zone" class="drop-zone">
+      <strong>ลากรูปมาวางที่นี่</strong>
+      <span>หรือกด “เพิ่มรูป” ด้านบน</span>
+    </div>
+
+    <section id="image-grid" class="image-grid"></section>
+    <p id="image-empty" class="empty-note" hidden>ยังไม่มีรูปใน project นี้ — เพิ่มรูปก่อนแล้วค่อยกลับมาวาด</p>
+
+    <p class="trash-link-row">
+      <a id="project-trash-link" class="ghost" href="/trash.html">ถังขยะของ project นี้ <span id="project-trash-count" class="badge">0</span></a>
+      <span class="hint">รูปที่ลบจะย้ายไปหน้านี้ ยังกู้คืนได้ และการลบถาวรทำได้เฉพาะเจ้าของ project</span>
+    </p>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="common.js"></script>
+  <script src="project.js"></script>
+</body>
+</html>

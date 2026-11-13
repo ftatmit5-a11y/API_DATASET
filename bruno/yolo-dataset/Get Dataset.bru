@@ -1,0 +1,15 @@
+meta {
+  name: Get Dataset
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/datasets/{{datasetId}}
+  body: none
+  auth: none
+}
+
+headers {
+  Accept: application/json
+}

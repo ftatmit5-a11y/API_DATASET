@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Annotation Studio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1>Annotation Studio</h1>
+      <p class="subtitle">วาด bounding box แล้วบันทึกเป็น YOLO format</p>
+    </div>
+    <nav>
+      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
+      <a href="/projects.html">Projects</a>
+      <a href="/">Dataset Builder</a>
+      <a id="trash-link" href="/trash.html">ถังขยะ</a>
+      <a id="export-link" class="disabled" aria-disabled="true">ทำ data (ZIP)</a>
+    </nav>
+  </header>
+
+  <main class="annotate-layout">
+    <aside class="panel sidebar">
+      <section>
+        <h2>Projects</h2>
+        <form id="project-form" class="inline-form">
+          <input id="project-name" type="text" placeholder="ชื่อ project เช่น งานวิจัยปลา" required>
+          <button type="submit">สร้าง</button>
+        </form>
+        <ul id="project-list" class="project-list"></ul>
+        <p id="project-empty" class="hint">ยังไม่มี project สร้างอันแรกเพื่อเก็บรูปและ label ไว้ด้วยกัน</p>
+      </section>
+
+      <section>
+        <h2>Classes</h2>
+        <form id="class-form" class="inline-form">
+          <input id="class-name" type="text" placeholder="ชื่อ class เช่น fish" required>
+          <button type="submit">เพิ่ม</button>
+        </form>
+        <ul id="class-list" class="class-list"></ul>
+        <p id="class-owner-hint" class="hint" hidden>เฉพาะเจ้าของ project เท่านั้นที่เพิ่มหรือแก้ไข class ได้</p>
+        <p class="hint">คลิก class เพื่อเลือกก่อนวาดกรอบ</p>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Images</h2>
+          <label class="upload-btn">
+            อัปโหลด
+            <input id="image-input" type="file" accept="image/*" multiple hidden>
+          </label>
+        </div>
+        <ul id="image-list" class="image-list"></ul>
+        <p id="image-empty" class="hint">ยังไม่มีรูป กด “อัปโหลด” เพื่อเริ่ม</p>
+      </section>
+    </aside>
+
+    <section class="panel canvas-panel">
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <span id="project-badge" class="chip">ยังไม่ได้เลือก project</span>
+          <span id="current-image" class="current-image">ยังไม่ได้เลือกรูป</span>
+          <span id="active-class" class="chip">ยังไม่ได้เลือก class</span>
+        </div>
+        <div class="toolbar-right">
+          <span id="dirty-indicator" class="dirty-indicator"></span>
+          <button id="save-btn" type="button" disabled>บันทึก</button>
+        </div>
+      </div>
+
+      <div id="canvas-wrap" class="canvas-wrap">
+        <p id="canvas-placeholder" class="canvas-placeholder">อัปโหลดหรือเลือกรูปเพื่อเริ่มวาด</p>
+        <canvas id="canvas"></canvas>
+      </div>
+
+      <div class="box-panel">
+        <div class="section-head">
+          <h2>Bounding boxes <span id="box-count" class="badge">0</span></h2>
+          <button id="clear-boxes" type="button" class="ghost">ล้างทั้งหมด</button>
+        </div>
+        <ul id="box-list" class="box-list"></ul>
+        <p class="hint">ลากบนรูปเพื่อวาดกรอบใหม่ · คลิกกรอบเพื่อเลือก · ลากมุมขวาล่างเพื่อปรับขนาด · Delete เพื่อลบ</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="common.js"></script>
+  <script src="annotate.js"></script>
+</body>
+</html>

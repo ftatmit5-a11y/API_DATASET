@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Projects</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1>Projects</h1>
+      <p class="subtitle">แต่ละ project เก็บรูปและ label แยกกัน เพิ่มรูปได้เรื่อยๆ แล้วค่อยทำ data ทีเดียว</p>
+    </div>
+    <nav>
+      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
+      <a href="/">Dataset Builder</a>
+      <a href="/annotate.html">Annotation Studio</a>
+      <a href="/trash.html">ถังขยะ</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="section-head">
+        <h2>สร้าง project ใหม่</h2>
+      </div>
+      <form id="project-form" class="inline-form">
+        <input id="project-name" type="text" placeholder="ชื่อ project เช่น งานวิจัยปลา" maxlength="80" required>
+        <button type="submit">สร้าง project</button>
+      </form>
+      <p class="hint">สร้างแล้ว project จะแสดงในรายการด้านล่าง กดเข้าไปเพื่อเพิ่มรูปและวาด label</p>
+    </section>
+
+    <section class="project-section">
+      <div class="section-head">
+        <h2>project ทั้งหมด <span id="project-count" class="badge">0</span></h2>
+      </div>
+      <div id="project-grid" class="project-grid"></div>
+      <p id="project-empty" class="empty-note" hidden>ยังไม่มี project — สร้างอันแรกด้านบนได้เลย</p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="common.js"></script>
+  <script src="projects.js"></script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+meta {
+  name: Upload Dataset
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/datasets
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  Accept: application/json
+}
+
+body:multipart-form {
+  file: 
+  train_ratio: 0.7
+  val_ratio: 0.2
+  test_ratio: 0.1
+  seed: 42
+}
+
+assert {
+  res.status: eq 201
+  res.body.summary.total: eq 10
+  res.body.summary.nc: eq 2
+}
+
+script:post-response {
+  const body = res.getBody();
+  if (body && body.id) {
+    bru.setEnvVar("datasetId", body.id);
+  }
+}
+
+docs {
+  ส่งไฟล์ ZIP ของชุด YOLO
+  ค่าเริ่มต้นถ้าไม่ส่ง ratio คือ train 0.7, val 0.2, test 0.1
+  ฟิลด์ names (ไม่บังคับ) เป็นชื่อคลาสคั่นด้วยจุลภาค เช่น cat,dog
+}

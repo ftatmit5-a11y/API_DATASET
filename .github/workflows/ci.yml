@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Go tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # -race is only enabled where it is dependable; Windows still gets the
+        # full test suite so behaviour differences (paths, file locking) show up.
+        include:
+          - os: ubuntu-latest
+            race: -race
+          - os: windows-latest
+            race: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        shell: bash
+        run: go test ${{ matrix.race }} -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Build binaries
+        run: go build ./...
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.out
+          if-no-files-found: ignore
+
+  web:
+    name: Web assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check JS
+        shell: bash
+        run: |
+          set -e
+          for file in web/*.js; do
+            node --check "$file"
+          done
+
+      - name: Embedded files and DOM ids match
+        run: node scripts/check-web.mjs
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: yoloapi:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test the image
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker create --rm -p 8080:8080 yoloapi:ci)"
+          trap 'docker stop "${cid}" >/dev/null 2>&1 || true' EXIT
+          docker start "${cid}" >/dev/null
+
+          healthy=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "${healthy}" -ne 1 ]; then
+            echo "server never became healthy"
+            docker logs "${cid}"
+            exit 1
+          fi
+
+          echo "health:    $(curl -fsS http://127.0.0.1:8080/health)"
+          echo "projects:  $(curl -fsS http://127.0.0.1:8080/api/projects)"
+          echo "trash:     $(curl -fsS http://127.0.0.1:8080/api/trash)"
+          curl -fsS http://127.0.0.1:8080/trash.html -o /dev/null -w "trash.html: %{http_code}\n"
+          docker logs "${cid}"

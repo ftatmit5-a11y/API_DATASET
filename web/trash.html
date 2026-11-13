@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trash</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1>ถังขยะ</h1>
+      <p class="subtitle">รูปที่ลบแบบ soft delete แยกราย project · กู้คืนได้เสมอ · ลบถาวรได้เฉพาะเจ้าของ project</p>
+    </div>
+    <nav>
+      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
+      <a href="/projects.html">← Projects</a>
+      <a href="/">Dataset Builder</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel trash-head-panel">
+      <div class="section-head">
+        <h2>รูปที่ถูกลบ <span id="trash-total" class="badge">0</span></h2>
+        <div class="toolbar-right">
+          <input id="trash-search" type="search" placeholder="ค้นหา project หรือชื่อรูป" autocomplete="off">
+        </div>
+      </div>
+      <p class="hint">
+        การกด “ลบถาวร” จะลบไฟล์จริงและ label ทั้งหมดของรูปนั้น กู้คืนไม่ได้ภายหลัง
+        และมีเฉพาะเจ้าของ project ที่ลบถาวรได้ ส่วน “กู้คืน” เจ้าของหรือผู้อัปโหลดยังกดได้
+      </p>
+    </section>
+
+    <div id="trash-groups" class="trash-groups"></div>
+    <p id="trash-empty" class="empty-note" hidden>ถังขยะว่าง — ไม่มีรูปที่ถูกลบในทุก project</p>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="common.js"></script>
+  <script src="trash.js"></script>
+</body>
+</html>

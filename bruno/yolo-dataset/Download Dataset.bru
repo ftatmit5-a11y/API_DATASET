@@ -1,0 +1,15 @@
+meta {
+  name: Download Dataset
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/api/datasets/{{datasetId}}/download
+  body: none
+  auth: none
+}
+
+docs {
+  ได้ไฟล์ ZIP ที่ข้างในมี data.yaml และโฟลเดอร์ train/val/test
+}
