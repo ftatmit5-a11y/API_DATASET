@@ -3,21 +3,28 @@ package annotation
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"yoloapi/internal/auth"
 )
 
-// Seeded demo users. The first one is the default owner for existing data.
+// Seeded demo accounts. The first one is the default owner for data created
+// before accounts existed. These passwords are placeholders on purpose: they
+// are printed at first start so the teacher can sign in and change them.
 const (
 	seedOwnerID        = "0000000000000001"
 	seedOwnerUsername  = "somchai"
 	seedOwnerName      = "สมชาย"
+	seedOwnerPassword  = "teacher1234"
 	seedMemberID       = "0000000000000002"
 	seedMemberUsername = "somying"
 	seedMemberName     = "สมหญิง"
+	seedMemberPassword = "student1234"
 )
 
 // OpenDB opens (or creates) the SQLite database used for annotation metadata.
@@ -56,13 +63,32 @@ var schemaStatements = []string{
 		id           TEXT PRIMARY KEY,
 		username     TEXT NOT NULL UNIQUE,
 		display_name TEXT NOT NULL,
-		created_at   TEXT NOT NULL
+		created_at   TEXT NOT NULL,
+		role         TEXT NOT NULL DEFAULT 'teacher',
+		password_hash TEXT NOT NULL DEFAULT ''
+	)`,
+	`CREATE TABLE IF NOT EXISTS sessions (
+		token_hash TEXT PRIMARY KEY,
+		user_id    TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		expires_at TEXT NOT NULL,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	)`,
 	`CREATE TABLE IF NOT EXISTS projects (
 		id         TEXT PRIMARY KEY,
 		name       TEXT NOT NULL,
 		created_at TEXT NOT NULL,
-		owner_id   TEXT NOT NULL DEFAULT ''
+		owner_id   TEXT NOT NULL DEFAULT '',
+		submissions_open INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE TABLE IF NOT EXISTS project_members (
+		project_id TEXT NOT NULL,
+		user_id    TEXT NOT NULL,
+		added_by   TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		PRIMARY KEY (project_id, user_id),
+		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+		FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 	)`,
 	`CREATE TABLE IF NOT EXISTS classes (
 		project_id TEXT NOT NULL,
@@ -96,6 +122,28 @@ var schemaStatements = []string{
 		FOREIGN KEY (project_id, image_name) REFERENCES images(project_id, name) ON DELETE CASCADE
 	)`,
 	`CREATE INDEX IF NOT EXISTS labels_by_image ON labels(project_id, image_name)`,
+	`CREATE TABLE IF NOT EXISTS submissions (
+		id            TEXT PRIMARY KEY,
+		project_id    TEXT NOT NULL,
+		student_id    TEXT NOT NULL,
+		image_name    TEXT NOT NULL,
+		original_name TEXT NOT NULL DEFAULT '',
+		note          TEXT NOT NULL DEFAULT '',
+		status        TEXT NOT NULL DEFAULT 'draft',
+		review_note   TEXT NOT NULL DEFAULT '',
+		labels_json   TEXT NOT NULL DEFAULT '[]',
+		image_id      TEXT NOT NULL DEFAULT '',
+		image_ref     TEXT NOT NULL DEFAULT '',
+		created_at    TEXT NOT NULL,
+		submitted_at  TEXT NOT NULL DEFAULT '',
+		reviewed_at   TEXT NOT NULL DEFAULT '',
+		reviewed_by   TEXT NOT NULL DEFAULT '',
+		FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+		FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+	)`,
+	`CREATE INDEX IF NOT EXISTS submissions_by_project_status ON submissions(project_id, status)`,
+	`CREATE INDEX IF NOT EXISTS submissions_by_student ON submissions(student_id, status)`,
+	`CREATE INDEX IF NOT EXISTS sessions_by_user ON sessions(user_id)`,
 }
 
 // prepareDB upgrades databases created before users and upload tracking existed.
@@ -106,10 +154,13 @@ func prepareDB(db *sql.DB) error {
 		ddl   string
 	}{
 		{"projects", "owner_id", `ALTER TABLE projects ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`},
+		{"projects", "submissions_open", `ALTER TABLE projects ADD COLUMN submissions_open INTEGER NOT NULL DEFAULT 0`},
 		{"images", "id", `ALTER TABLE images ADD COLUMN id TEXT NOT NULL DEFAULT ''`},
 		{"images", "original_name", `ALTER TABLE images ADD COLUMN original_name TEXT NOT NULL DEFAULT ''`},
 		{"images", "uploaded_by", `ALTER TABLE images ADD COLUMN uploaded_by TEXT NOT NULL DEFAULT ''`},
 		{"images", "deleted_at", `ALTER TABLE images ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''`},
+		{"users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'teacher'`},
+		{"users", "password_hash", `ALTER TABLE users ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, col := range columns {
 		exists, err := columnExists(db, col.table, col.name)
@@ -128,13 +179,33 @@ func prepareDB(db *sql.DB) error {
 		id       string
 		username string
 		name     string
+		role     string
+		password string
 	}{
-		{seedOwnerID, seedOwnerUsername, seedOwnerName},
-		{seedMemberID, seedMemberUsername, seedMemberName},
+		{seedOwnerID, seedOwnerUsername, seedOwnerName, auth.RoleTeacher, seedOwnerPassword},
+		{seedMemberID, seedMemberUsername, seedMemberName, auth.RoleStudent, seedMemberPassword},
 	} {
-		if _, err := db.Exec(`INSERT OR IGNORE INTO users (id, username, display_name, created_at)
-			VALUES (?, ?, ?, ?)`, user.id, user.username, user.name, now); err != nil {
+		hashed, err := auth.HashPassword(user.password)
+		if err != nil {
 			return err
+		}
+		if _, err := db.Exec(`INSERT OR IGNORE INTO users
+			(id, username, display_name, created_at, role, password_hash)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			user.id, user.username, user.name, now, user.role, hashed); err != nil {
+			return err
+		}
+		// Accounts created before logins existed get their demo password and
+		// role once, when password_hash is still empty. Accounts the teacher has
+		// already touched are never overwritten.
+		res, err := db.Exec(`UPDATE users SET password_hash = ?, role = ?
+			WHERE username = ? AND password_hash = ''`, hashed, user.role, user.username)
+		if err != nil {
+			return err
+		}
+		if touched, _ := res.RowsAffected(); touched > 0 {
+			log.Printf("seeded login for %q (role %s) - change this password after signing in",
+				user.username, user.role)
 		}
 	}
 

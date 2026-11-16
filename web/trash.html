@@ -13,9 +13,11 @@
       <p class="subtitle">รูปที่ลบแบบ soft delete แยกราย project · กู้คืนได้เสมอ · ลบถาวรได้เฉพาะเจ้าของ project</p>
     </div>
     <nav>
-      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
-      <a href="/projects.html">← Projects</a>
-      <a href="/">Dataset Builder</a>
+      <span id="identity" class="identity"></span>
+      <a href="/projects.html" data-teacher-only>← Projects</a>
+      <a href="/pending.html" data-teacher-only>งานรออนุมัติ</a>
+      <a href="/" data-teacher-only>Dataset Builder</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
     </nav>
   </header>
 
@@ -28,8 +30,9 @@
         </div>
       </div>
       <p class="hint">
-        การกด “ลบถาวร” จะลบไฟล์จริงและ label ทั้งหมดของรูปนั้น กู้คืนไม่ได้ภายหลัง
-        และมีเฉพาะเจ้าของ project ที่ลบถาวรได้ ส่วน “กู้คืน” เจ้าของหรือผู้อัปโหลดยังกดได้
+        รูปมาอยู่ที่นี่ได้ 2 ทาง: อาจารย์ลบเอง หรืออาจารย์กด “ไม่ผ่าน” ให้นักศึกษา
+        · <strong>กู้คืน</strong> และ <strong>ลบถาวร</strong> ทำได้เฉพาะเจ้าของ project เท่านั้น
+        ถ้านักศึกษาอยากแก้รูปที่ไม่ผ่าน ให้อัปโหลดส่งมาใหม่เป็น submission
       </p>
     </section>
 

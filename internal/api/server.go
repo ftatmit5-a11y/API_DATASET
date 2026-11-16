@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"yoloapi/internal/annotation"
@@ -26,6 +27,10 @@ type Server struct {
 	MaxUpload int64
 	Projects  *annotation.Manager
 	mux       *http.ServeMux
+
+	throttle    *loginThrottle
+	sessionDone chan struct{}
+	sessionOnce sync.Once
 }
 
 // New builds the HTTP routes.
@@ -51,44 +56,86 @@ func New(dataDir string, maxUpload int64) (*Server, error) {
 			log.Printf("imported legacy annotations as project \"Default\"")
 		}
 	}
-	s := &Server{DataDir: dataDir, MaxUpload: maxUpload, Projects: projects, mux: http.NewServeMux()}
+	s := &Server{
+		DataDir:   dataDir,
+		MaxUpload: maxUpload,
+		Projects:  projects,
+		mux:       http.NewServeMux(),
+		throttle:  newLoginThrottle(),
+	}
 	s.routes()
+	s.startSessionGC()
 	return s, nil
 }
 
-// Handler is the root HTTP handler.
+// Handler is the root HTTP handler. The guard enforces login for the API while
+// leaving pages, the endpoint index, and the login call public.
 func (s *Server) Handler() http.Handler {
-	return s.log(s.mux)
+	return s.log(s.guard(s.mux))
 }
 
 // Close releases the SQLite database handle.
 func (s *Server) Close() error {
+	s.stopSessionGC()
 	if s == nil || s.Projects == nil {
 		return nil
 	}
 	return s.Projects.Close()
 }
 
+// protectedAPIPath reports whether a request path needs a signed-in session.
+// Static pages are public shells: their data calls are protected, and the
+// client redirects to the login page on 401.
+func protectedAPIPath(path string) bool {
+	if !strings.HasPrefix(path, "/api/") {
+		return false
+	}
+	// The login call is the only way in, so it must stay reachable anonymous.
+	return path != "/api/auth/login"
+}
+
 func (s *Server) routes() {
+	// Public.
 	s.mux.HandleFunc("GET /health", s.health)
 	s.mux.HandleFunc("GET /api", s.index)
+	s.mux.HandleFunc("POST /api/auth/login", s.login)
 	s.mux.HandleFunc("GET /annotate", s.annotatePage)
 	s.mux.HandleFunc("GET /projects", s.projectsPage)
 	s.mux.HandleFunc("GET /project", s.projectPage)
 	s.mux.HandleFunc("GET /trash", s.trashPage)
+	s.mux.HandleFunc("GET /pending", s.pendingPage)
+	s.mux.HandleFunc("GET /mywork", s.myWorkPage)
+	s.mux.HandleFunc("GET /users", s.usersPage)
+	s.mux.HandleFunc("GET /login", s.loginPage)
 	s.mux.Handle("GET /", http.FileServer(http.FS(web.Files)))
-	s.mux.HandleFunc("POST /api/datasets", s.upload)
-	s.mux.HandleFunc("GET /api/datasets", s.list)
-	s.mux.HandleFunc("GET /api/datasets/{id}", s.get)
-	s.mux.HandleFunc("GET /api/datasets/{id}/download", s.download)
-	s.mux.HandleFunc("DELETE /api/datasets/{id}", s.remove)
+
+	// Session-managed accounts.
+	s.mux.HandleFunc("GET /api/auth/me", s.whoAmI)
+	s.mux.HandleFunc("POST /api/auth/logout", s.logout)
+	s.mux.HandleFunc("POST /api/auth/password", s.changePassword)
+	s.mux.HandleFunc("GET /api/users", s.usersList)
+	s.mux.HandleFunc("POST /api/users", s.userCreate)
+	s.mux.HandleFunc("PATCH /api/users/{id}", s.userUpdate)
+
+	// Dataset splitting: teacher-only, because it writes jobs to the server.
+	s.mux.HandleFunc("POST /api/datasets", s.teacherOnly(s.upload))
+	s.mux.HandleFunc("GET /api/datasets", s.teacherOnly(s.list))
+	s.mux.HandleFunc("GET /api/datasets/{id}", s.teacherOnly(s.get))
+	s.mux.HandleFunc("GET /api/datasets/{id}/download", s.teacherOnly(s.download))
+	s.mux.HandleFunc("DELETE /api/datasets/{id}", s.teacherOnly(s.remove))
+
+	// Projects.
 	s.mux.HandleFunc("GET /api/projects", s.projectsList)
 	s.mux.HandleFunc("POST /api/projects", s.projectCreate)
-	s.mux.HandleFunc("GET /api/trash", s.trashList)
-	s.mux.HandleFunc("GET /api/users", s.usersList)
 	s.mux.HandleFunc("GET /api/projects/{id}", s.projectGet)
 	s.mux.HandleFunc("PATCH /api/projects/{id}", s.projectRename)
 	s.mux.HandleFunc("DELETE /api/projects/{id}", s.projectDelete)
+	s.mux.HandleFunc("PUT /api/projects/{id}/submissions-open", s.projectSubmissionsSwitch)
+	s.mux.HandleFunc("GET /api/projects/{id}/members", s.projectMembersList)
+	s.mux.HandleFunc("POST /api/projects/{id}/members", s.projectMembersAdd)
+	s.mux.HandleFunc("DELETE /api/projects/{id}/members/{userId}", s.projectMemberRemove)
+
+	// Images, labels, classes, export.
 	s.mux.HandleFunc("POST /api/projects/{id}/images", s.projectUploadImages)
 	s.mux.HandleFunc("GET /api/projects/{id}/images/{name}", s.projectServeImage)
 	s.mux.HandleFunc("DELETE /api/projects/{id}/images/{name}", s.projectTrashImage)
@@ -99,6 +146,21 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/projects/{id}/classes", s.projectAddClass)
 	s.mux.HandleFunc("PUT /api/projects/{id}/classes", s.projectPutClasses)
 	s.mux.HandleFunc("GET /api/projects/{id}/export", s.projectExport)
+
+	// Trash and submissions.
+	s.mux.HandleFunc("GET /api/trash", s.trashList)
+	s.mux.HandleFunc("GET /api/pending", s.pendingList)
+	s.mux.HandleFunc("GET /api/mywork", s.myWorkList)
+	s.mux.HandleFunc("GET /api/projects/{id}/submissions", s.submissionList)
+	s.mux.HandleFunc("POST /api/projects/{id}/submissions", s.submissionCreate)
+	s.mux.HandleFunc("GET /api/projects/{id}/submissions/{sid}", s.submissionGet)
+	s.mux.HandleFunc("GET /api/projects/{id}/submissions/{sid}/image", s.submissionImage)
+	s.mux.HandleFunc("PUT /api/projects/{id}/submissions/{sid}/labels", s.submissionPutLabels)
+	s.mux.HandleFunc("POST /api/projects/{id}/submissions/{sid}/submit", s.submissionSubmit)
+	s.mux.HandleFunc("POST /api/projects/{id}/submissions/{sid}/withdraw", s.submissionWithdraw)
+	s.mux.HandleFunc("DELETE /api/projects/{id}/submissions/{sid}", s.submissionDelete)
+	s.mux.HandleFunc("POST /api/projects/{id}/submissions/{sid}/approve", s.submissionApprove)
+	s.mux.HandleFunc("POST /api/projects/{id}/submissions/{sid}/reject", s.submissionReject)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
@@ -109,8 +171,16 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service": "yolo-dataset-api",
+		"auth":    "all endpoints below /api/ except login need a session cookie; writes also need an X-Requested-With header",
 		"endpoints": []string{
 			"GET /health",
+			"POST /api/auth/login",
+			"POST /api/auth/logout",
+			"GET /api/auth/me",
+			"POST /api/auth/password",
+			"GET /api/users",
+			"POST /api/users",
+			"PATCH /api/users/{id}",
 			"POST /api/datasets",
 			"GET /api/datasets",
 			"GET /api/datasets/{id}",
@@ -118,11 +188,16 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			"DELETE /api/datasets/{id}",
 			"GET /api/projects",
 			"POST /api/projects",
-			"GET /api/users",
 			"GET /api/trash",
+			"GET /api/pending",
+			"GET /api/mywork",
 			"GET /api/projects/{id}",
 			"PATCH /api/projects/{id}",
 			"DELETE /api/projects/{id}",
+			"PUT /api/projects/{id}/submissions-open",
+			"GET /api/projects/{id}/members",
+			"POST /api/projects/{id}/members",
+			"DELETE /api/projects/{id}/members/{userId}",
 			"POST /api/projects/{id}/images",
 			"GET /api/projects/{id}/images/{name}",
 			"DELETE /api/projects/{id}/images/{name}",
@@ -133,6 +208,16 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 			"POST /api/projects/{id}/classes",
 			"PUT /api/projects/{id}/classes",
 			"GET /api/projects/{id}/export",
+			"GET /api/projects/{id}/submissions",
+			"POST /api/projects/{id}/submissions",
+			"GET /api/projects/{id}/submissions/{sid}",
+			"GET /api/projects/{id}/submissions/{sid}/image",
+			"PUT /api/projects/{id}/submissions/{sid}/labels",
+			"POST /api/projects/{id}/submissions/{sid}/submit",
+			"POST /api/projects/{id}/submissions/{sid}/withdraw",
+			"DELETE /api/projects/{id}/submissions/{sid}",
+			"POST /api/projects/{id}/submissions/{sid}/approve",
+			"POST /api/projects/{id}/submissions/{sid}/reject",
 		},
 	})
 }

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Accounts</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1>บัญชีผู้ใช้</h1>
+      <p class="subtitle">อาจารย์เพิ่มบัญชีนักศึกษา/อาจารย์ และรีเซ็ตรหัสผ่านได้</p>
+    </div>
+    <nav>
+      <span id="identity" class="identity"></span>
+      <a href="/projects.html" data-teacher-only>Projects</a>
+      <a href="/pending.html" data-teacher-only>งานรออนุมัติ</a>
+      <a href="/trash.html" data-teacher-only>ถังขยะ</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="section-head">
+        <h2>เพิ่มบัญชีใหม่</h2>
+      </div>
+      <form id="user-form" class="grid-form">
+        <label>
+          ชื่อผู้ใช้ (login)
+          <input id="new-username" type="text" autocomplete="off" maxlength="32" required>
+        </label>
+        <label>
+          ชื่อที่แสดง
+          <input id="new-display" type="text" maxlength="80" required>
+        </label>
+        <label>
+          บทบาท
+          <select id="new-role">
+            <option value="student">นักศึกษา (student)</option>
+            <option value="teacher">อาจารย์ (teacher)</option>
+          </select>
+        </label>
+        <label>
+          รหัสผ่านเริ่มต้น
+          <input id="new-password" type="text" autocomplete="new-password" minlength="6" maxlength="256" required>
+        </label>
+        <button type="submit" class="primary-btn">สร้างบัญชี</button>
+      </form>
+      <p class="hint">บอกรหัสผ่านเริ่มต้นกับเจ้าของบัญชีโดยตรง และให้เขาเปลี่ยนเองที่บัตร “เปลี่ยนรหัสผ่านของฉัน” ด้านล่าง</p>
+    </section>
+
+    <section class="project-section">
+      <div class="section-head">
+        <h2>บัญชีทั้งหมด <span id="user-count" class="badge">0</span></h2>
+      </div>
+      <div id="user-table" class="table-wrap"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>เปลี่ยนรหัสผ่านของฉัน</h2>
+      </div>
+      <form id="self-form" class="grid-form">
+        <label>
+          รหัสผ่านปัจจุบัน
+          <input id="self-current" type="password" autocomplete="current-password" required maxlength="256">
+        </label>
+        <label>
+          รหัสผ่านใหม่
+          <input id="self-password" type="password" autocomplete="new-password" minlength="6" maxlength="256" required>
+        </label>
+        <button type="submit" class="ghost">เปลี่ยนรหัสผ่าน</button>
+      </form>
+      <p class="hint">หลังเปลี่ยน ระบบจะออกจากระบบทุกอุปกรณ์ที่ล็อกอินอยู่</p>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="common.js"></script>
+  <script src="users.js"></script>
+</body>
+</html>

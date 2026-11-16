@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"yoloapi/internal/auth"
 )
 
 func TestManagerProjects(t *testing.T) {
@@ -114,21 +116,40 @@ func TestUsersOwnershipAndUploader(t *testing.T) {
 	if member.Username != seedMemberUsername || member.DisplayName != seedMemberName {
 		t.Fatalf("member = %+v", member)
 	}
+	if member.Role != auth.RoleStudent {
+		t.Fatalf("seeded member role = %q want student", member.Role)
+	}
 	if _, err := manager.User("00000000000000ff"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected unknown user to be not found, got %v", err)
 	}
 
-	info, err := manager.CreateForOwner("Member project", member.ID)
+	// Students cannot create projects; teachers can.
+	if _, err := manager.CreateForOwner("Member project", member.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("student creating a project: got %v want forbidden", err)
+	}
+	secondTeacher, err := manager.NewUser("teacher02", "อาจารย์ที่สอง", auth.RoleTeacher, "password123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.OwnerID != member.ID || info.OwnerName != member.DisplayName || info.OwnerUsername != member.Username {
+	if err := manager.CheckTeacher(member.ID); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("student should fail the teacher check: %v", err)
+	}
+	if err := manager.CheckTeacher(secondTeacher.ID); err != nil {
+		t.Fatalf("teacher check failed for a teacher: %v", err)
+	}
+
+	info, err := manager.CreateForOwner("Second teacher project", secondTeacher.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.OwnerID != secondTeacher.ID || info.OwnerName != secondTeacher.DisplayName ||
+		info.OwnerUsername != secondTeacher.Username {
 		t.Fatalf("project owner = %+v", info)
 	}
 	if err := manager.CheckOwner(info.ID, seedOwnerID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("non-owner should be forbidden, got %v", err)
 	}
-	if err := manager.CheckOwner(info.ID, member.ID); err != nil {
+	if err := manager.CheckOwner(info.ID, secondTeacher.ID); err != nil {
 		t.Fatalf("owner should be allowed: %v", err)
 	}
 

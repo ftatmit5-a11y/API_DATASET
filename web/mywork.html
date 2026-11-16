@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>งานของฉัน</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1>งานของฉัน</h1>
+      <p class="subtitle">เลือกรูป วาด bounding box แล้วส่งให้อาจารย์ตรวจ · รูปจะเข้า dataset ก็ต่อเมื่ออนุมัติแล้ว</p>
+    </div>
+    <nav>
+      <span id="identity" class="identity"></span>
+      <a href="/trash.html" data-teacher-only>ถังขยะ</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="section-head">
+        <h2>สรุปงาน <span id="work-total" class="badge">0</span></h2>
+        <div class="toolbar-right">
+          <button id="refresh-btn" type="button" class="ghost">รีเฟรช</button>
+        </div>
+      </div>
+      <div class="project-stats-row">
+        <span class="chip" id="count-draft">0ฉบับร่าง</span>
+        <span class="chip" id="count-pending">0รออนุมัติ</span>
+        <span class="chip" id="count-approved">0อนุมัติแล้ว</span>
+        <span class="chip" id="count-rejected">0ไม่ผ่าน</span>
+      </div>
+      <p class="hint">
+        ส่งได้เฉพาะ project ที่อาจารย์เพิ่มคุณเป็นนักศึกษาและเปิดรับรูป ·
+        แก้กรอบได้เต็มที่ระหว่างสถานะ “ฉบับร่าง” และ “รออนุมัติ” ก่อนอาจารย์ตรวจ
+      </p>
+    </section>
+
+    <div id="work-groups" class="trash-groups"></div>
+    <p id="work-empty" class="empty-note" hidden>ยังไม่มี project ที่เปิดรับรูปจากคุณ — ให้อาจารย์เพิ่มคุณเข้า project ก่อน</p>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="common.js"></script>
+  <script src="mywork.js"></script>
+</body>
+</html>

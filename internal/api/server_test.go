@@ -7,20 +7,14 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
 func TestUploadListDownloadDelete(t *testing.T) {
-	srv, err := New(t.TempDir(), 8<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srv.Close()
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	s := newTestServer(t)
+	teacher := s.teacher()
 
 	body, contentType := zipForm(t, map[string]string{
 		"train_ratio": "0.7",
@@ -28,10 +22,7 @@ func TestUploadListDownloadDelete(t *testing.T) {
 		"test_ratio":  "0.1",
 		"seed":        "42",
 	})
-	res, err := http.Post(ts.URL+"/api/datasets", contentType, body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := teacher.do(http.MethodPost, "/api/datasets", body, contentType)
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(res.Body)
@@ -45,23 +36,16 @@ func TestUploadListDownloadDelete(t *testing.T) {
 		t.Fatalf("summary = %+v", created.Summary)
 	}
 
-	got, err := http.Get(ts.URL + "/api/datasets/" + created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got.Body.Close()
-	if got.StatusCode != http.StatusOK {
-		t.Fatalf("get status %d", got.StatusCode)
+	// Splitting a dataset is teacher work, and students are signed out of it.
+	s.student().expect(http.MethodGet, "/api/datasets", "", http.StatusForbidden)
+	s.anonymous().expect(http.MethodGet, "/api/datasets", "", http.StatusUnauthorized)
+
+	if got := teacher.statusOf(http.MethodGet, "/api/datasets/"+created.ID, ""); got != http.StatusOK {
+		t.Fatalf("get status %d", got)
 	}
 
-	dl, err := http.Get(ts.URL + created.DownloadURL)
-	if err != nil {
-		t.Fatal(err)
-	}
+	dl := teacher.get(created.DownloadURL)
 	defer dl.Body.Close()
-	if dl.StatusCode != http.StatusOK {
-		t.Fatalf("download status %d", dl.StatusCode)
-	}
 	tmp := filepath.Join(t.TempDir(), "out.zip")
 	f, err := os.Create(tmp)
 	if err != nil {
@@ -86,34 +70,20 @@ func TestUploadListDownloadDelete(t *testing.T) {
 		t.Fatal("downloaded zip missing data.yaml")
 	}
 
-	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/datasets/"+created.ID, nil)
-	del, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	del.Body.Close()
-	if del.StatusCode != http.StatusOK {
-		t.Fatalf("delete status %d", del.StatusCode)
+	teacher.expect(http.MethodDelete, "/api/datasets/"+created.ID, "", http.StatusOK)
+	if got := teacher.statusOf(http.MethodGet, "/api/datasets/"+created.ID, ""); got != http.StatusNotFound {
+		t.Fatalf("deleted dataset: status %d", got)
 	}
 }
 
 func TestRejectBadRatio(t *testing.T) {
-	srv, err := New(t.TempDir(), 8<<20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer srv.Close()
-	ts := httptest.NewServer(srv.Handler())
-	defer ts.Close()
+	s := newTestServer(t)
 	body, contentType := zipForm(t, map[string]string{
 		"train_ratio": "0.5",
 		"val_ratio":   "0.5",
 		"test_ratio":  "0.5",
 	})
-	res, err := http.Post(ts.URL+"/api/datasets", contentType, body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := s.teacher().do(http.MethodPost, "/api/datasets", body, contentType)
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status %d", res.StatusCode)

@@ -17,7 +17,18 @@ const pages = [
   ['projects.html', 'projects.js'],
   ['project.html', 'project.js'],
   ['trash.html', 'trash.js'],
+  ['pending.html', 'pending.js'],
+  ['mywork.html', 'mywork.js'],
+  ['users.html', 'users.js'],
+  ['login.html', 'login.js'],
   ['index.html', 'app.js'],
+];
+
+// Names that must not be redeclared with const/let by a page script, because
+// common.js already owns them at global scope.
+const sharedHelpers = [
+  'mkEl', 'request', 'userFetch', 'fetchMe', 'requireUser', 'renderIdentity',
+  'goToLogin', 'homePath', 'isTeacher', 'isStudent', 'jsonOptions', 'toastBanner', 'logout',
 ];
 
 const problems = [];
@@ -70,6 +81,18 @@ for (const [htmlName, jsName] of pages) {
     const ownIndex = html.indexOf(`src="${jsName}"`);
     if (ownIndex !== -1 && commonIndex > ownIndex) {
       problems.push(`${htmlName}: common.js must be loaded before ${jsName}`);
+    }
+  }
+
+  // A page that lexically redeclares a name common.js already owns (const/let)
+  // throws "Identifier has already been declared" at load. Re-declaring with a
+  // function declaration is legal, so only const/let are checked here.
+  if (loadsCommon) {
+    const shadow = js.match(
+      new RegExp(`^(?:const|let)\\s+(${sharedHelpers.join('|')})\\b`, 'm'),
+    );
+    if (shadow) {
+      problems.push(`${jsName}: const/let redeclares common.js helper "${shadow[1]}" and would throw at load`);
     }
   }
 }

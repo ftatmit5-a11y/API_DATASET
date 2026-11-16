@@ -13,13 +13,27 @@
       <p class="subtitle">วาด bounding box แล้วบันทึกเป็น YOLO format</p>
     </div>
     <nav>
-      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
-      <a href="/projects.html">Projects</a>
-      <a href="/">Dataset Builder</a>
-      <a id="trash-link" href="/trash.html">ถังขยะ</a>
-      <a id="export-link" class="disabled" aria-disabled="true">ทำ data (ZIP)</a>
+      <span id="identity" class="identity"></span>
+      <a href="/mywork.html">งานของฉัน</a>
+      <a href="/projects.html" data-teacher-only>Projects</a>
+      <a href="/pending.html" data-teacher-only>รออนุมัติ</a>
+      <a href="/" data-teacher-only>Dataset Builder</a>
+      <a id="trash-link" href="/trash.html" data-teacher-only>ถังขยะ</a>
+      <a id="export-link" class="disabled" aria-disabled="true" data-teacher-only>ทำ data (ZIP)</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
     </nav>
   </header>
+
+  <section id="submission-bar" class="submission-bar" hidden>
+    <span id="submission-status" class="chip"></span>
+    <span id="submission-meta" class="submission-meta"></span>
+    <span class="submission-spacer"></span>
+    <a id="submission-back" class="ghost" href="/pending.html">← กลับไปคิวตรวจ</a>
+    <button id="submission-submit" type="button" class="primary-btn small" hidden>ส่งอนุมัติ</button>
+    <button id="submission-withdraw" type="button" class="ghost" hidden>ดึงกลับมาแก้</button>
+    <button id="submission-approve" type="button" class="primary-btn small" hidden>อนุมัติ</button>
+    <button id="submission-reject" type="button" class="danger-btn small" hidden>ไม่ผ่าน</button>
+  </section>
 
   <main class="annotate-layout">
     <aside class="panel sidebar">

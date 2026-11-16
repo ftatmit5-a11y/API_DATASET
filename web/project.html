@@ -13,10 +13,12 @@
       <p class="subtitle" id="project-subtitle">กำลังโหลด...</p>
     </div>
     <nav>
-      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
-      <a href="/projects.html">← Projects</a>
-      <a href="/trash.html">ถังขยะ</a>
-      <a href="/">Dataset Builder</a>
+      <span id="identity" class="identity"></span>
+      <a href="/projects.html" data-teacher-only>← Projects</a>
+      <a href="/pending.html" data-teacher-only>งานรออนุมัติ</a>
+      <a href="/trash.html" data-teacher-only>ถังขยะ</a>
+      <a href="/" data-teacher-only>Dataset Builder</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
     </nav>
   </header>
 
@@ -26,7 +28,7 @@
         <h2>รูปใน project</h2>
         <div class="toolbar-right">
           <label class="upload-btn" id="upload-label">
-            + เพิ่มรูป
+            + เพิ่มรูป (อาจารย์)
             <input id="image-input" type="file" accept="image/*" multiple hidden>
           </label>
           <button id="make-data" type="button" class="primary-btn">ทำ data (ZIP)</button>
@@ -38,10 +40,37 @@
         <span class="chip" id="stat-images">0 รูป</span>
         <span class="chip" id="stat-boxes">0 boxes</span>
         <span class="chip" id="stat-classes">0 classes</span>
+        <span class="chip" id="stat-pending">0 รออนุมัติ</span>
       </div>
 
       <div id="class-chips" class="class-chips"></div>
-      <p class="hint">คลิกรูปเพื่อวาด bounding box · เพิ่มรูปได้เรื่อยๆ แล้วค่อยกด “ทำ data” ตอนพร้อม</p>
+      <p class="hint">
+        รูปที่อาจารย์อัปโหลดเข้าที่นี่คือเข้า dataset ทันที · รูปของนักศึกษาต้องผ่านการอนุมัติก่อน
+      </p>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <h2>การส่งงานของนักศึกษา</h2>
+        <div class="toolbar-right">
+          <label class="checkbox-row">
+            <input id="open-switch" type="checkbox">
+            เปิดรับรูปจากนักศึกษา
+          </label>
+          <a id="review-link" class="primary-btn small" href="/pending.html">ไปหน้าตรวจงาน</a>
+        </div>
+      </div>
+
+      <div id="class-editor" class="class-editor" hidden></div>
+
+      <div class="field-group">
+        <div class="section-head">
+          <h3>นักศึกษาใน project <span id="member-count" class="badge">0</span></h3>
+          <button id="save-members" type="button" class="ghost">บันทึกนักศึกษาที่เลือก</button>
+        </div>
+        <div id="member-picker" class="student-picker"></div>
+        <p class="hint">เฉพาะนักศึกษาที่ถูกเลือกที่นี่เท่านั้นที่เห็น project นี้และส่งรูปได้</p>
+      </div>
     </section>
 
     <div id="drop-zone" class="drop-zone">

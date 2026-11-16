@@ -13,39 +13,41 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"yoloapi/internal/auth"
 )
 
-// DefaultUserID is the seeded user that owns data created before accounts
-// existed. Requests without an X-User-ID header are treated as this user.
+// DefaultUserID is the seeded teacher account. It owns data created before
+// logins existed.
 const DefaultUserID = seedOwnerID
-
-// User is one simulated account. There is no password or login yet: the web UI
-// stores the selected user locally and sends X-User-ID with each request.
-type User struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-}
 
 // ProjectInfo is the metadata shown in the project list.
 type ProjectInfo struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	CreatedAt     time.Time `json:"created_at"`
-	OwnerID       string    `json:"owner_id"`
-	OwnerUsername string    `json:"owner_username"`
-	OwnerName     string    `json:"owner_name"`
-	ImageCount    int       `json:"image_count"`
-	BoxCount      int       `json:"box_count"`
-	ClassCount    int       `json:"class_count"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	CreatedAt        time.Time `json:"created_at"`
+	OwnerID          string    `json:"owner_id"`
+	OwnerUsername    string    `json:"owner_username"`
+	OwnerName        string    `json:"owner_name"`
+	ImageCount       int       `json:"image_count"`
+	BoxCount         int       `json:"box_count"`
+	ClassCount       int       `json:"class_count"`
+	SubmissionsOpen  bool      `json:"submissions_open"`
+	PendingCount     int       `json:"pending_count"`
+	MemberCount      int       `json:"member_count"`
+	MySubmissionOpen int       `json:"my_submissions_open,omitempty"`
 }
 
 // ProjectState is one project plus its classes, active images, and trash.
+// The Can* flags are computed for the caller so the UI can hide actions it has
+// no permission for instead of failing after a click.
 type ProjectState struct {
 	ProjectInfo
-	Classes []string    `json:"classes"`
-	Images  []ImageInfo `json:"images"`
-	Trash   []ImageInfo `json:"trash"`
+	Classes   []string    `json:"classes"`
+	Images    []ImageInfo `json:"images"`
+	Trash     []ImageInfo `json:"trash"`
+	CanReview bool        `json:"can_review"`
+	CanSubmit bool        `json:"can_submit"`
 }
 
 // Manager owns the projects root folder and the SQLite metadata database.
@@ -78,45 +80,6 @@ func NewManager(dbPath, root string) (*Manager, error) {
 	return m, nil
 }
 
-// Users lists the simulated accounts, oldest first.
-func (m *Manager) Users() ([]User, error) {
-	rows, err := m.db.Query(`SELECT id, username, display_name FROM users ORDER BY created_at, id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := []User{}
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// User returns one simulated account, or ErrNotFound.
-func (m *Manager) User(id string) (User, error) {
-	if id == "" {
-		id = DefaultUserID
-	}
-	var u User
-	err := m.db.QueryRow(`SELECT id, username, display_name FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.DisplayName)
-	if errors.Is(err, sql.ErrNoRows) {
-		return User{}, fmt.Errorf("%w: user %s", ErrNotFound, id)
-	}
-	if err != nil {
-		return User{}, err
-	}
-	return u, nil
-}
-
 // CheckOwner returns ErrForbidden when userID is not the owner of the project.
 func (m *Manager) CheckOwner(projectID, userID string) error {
 	info, err := m.info(projectID)
@@ -129,19 +92,44 @@ func (m *Manager) CheckOwner(projectID, userID string) error {
 	return nil
 }
 
-// List returns every project, newest first.
-func (m *Manager) List() ([]ProjectInfo, error) {
-	rows, err := m.db.Query(`
-		SELECT p.id, p.name, p.created_at, p.owner_id,
+// projectColumns is the shared projection used by every project listing.
+const projectColumns = `
+		SELECT p.id, p.name, p.created_at, p.owner_id, p.submissions_open,
 			COALESCE(u.username, ''), COALESCE(u.display_name, ''),
 			(SELECT COUNT(*) FROM images i WHERE i.project_id = p.id AND i.deleted_at = ''),
 			(SELECT COUNT(*) FROM labels l
 			 JOIN images i2 ON i2.project_id = l.project_id AND i2.name = l.image_name
 			 WHERE l.project_id = p.id AND i2.deleted_at = ''),
-			(SELECT COUNT(*) FROM classes c WHERE c.project_id = p.id)
+			(SELECT COUNT(*) FROM classes c WHERE c.project_id = p.id),
+			(SELECT COUNT(*) FROM submissions s WHERE s.project_id = p.id AND s.status = 'pending'),
+			(SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id)
 		FROM projects p
 		LEFT JOIN users u ON u.id = p.owner_id
-		ORDER BY p.created_at DESC, p.name ASC`)
+		`
+
+func scanProject(row scanner) (ProjectInfo, error) {
+	var (
+		info    ProjectInfo
+		created string
+		open    int
+	)
+	if err := row.Scan(
+		&info.ID, &info.Name, &created, &info.OwnerID, &open,
+		&info.OwnerUsername, &info.OwnerName,
+		&info.ImageCount, &info.BoxCount, &info.ClassCount,
+		&info.PendingCount, &info.MemberCount,
+	); err != nil {
+		return ProjectInfo{}, err
+	}
+	info.CreatedAt = parseTime(created)
+	info.SubmissionsOpen = open != 0
+	return info, nil
+}
+
+// List returns every project, newest first. HTTP handlers use ListVisible
+// instead so a student never receives projects they are not in.
+func (m *Manager) List() ([]ProjectInfo, error) {
+	rows, err := m.db.Query(projectColumns + `ORDER BY p.created_at DESC, p.name ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -149,16 +137,10 @@ func (m *Manager) List() ([]ProjectInfo, error) {
 
 	out := []ProjectInfo{}
 	for rows.Next() {
-		var info ProjectInfo
-		var created string
-		if err := rows.Scan(
-			&info.ID, &info.Name, &created, &info.OwnerID,
-			&info.OwnerUsername, &info.OwnerName,
-			&info.ImageCount, &info.BoxCount, &info.ClassCount,
-		); err != nil {
+		info, err := scanProject(rows)
+		if err != nil {
 			return nil, err
 		}
-		info.CreatedAt = parseTime(created)
 		out = append(out, info)
 	}
 	if err := rows.Err(); err != nil {
@@ -167,23 +149,126 @@ func (m *Manager) List() ([]ProjectInfo, error) {
 	return out, nil
 }
 
-// Create makes a new project owned by the default seeded user.
+// ListVisible returns the projects one account may see: a teacher gets every
+// project, a student only the projects they were added to. Newest first.
+func (m *Manager) ListVisible(userID string) ([]ProjectInfo, error) {
+	u, err := m.User(userID)
+	if err != nil {
+		return nil, err
+	}
+	if u.Role == auth.RoleTeacher {
+		return m.List()
+	}
+	return m.memberProjects(u.ID)
+}
+
+// memberProjects lists the projects a student was added to, newest first.
+func (m *Manager) memberProjects(userID string) ([]ProjectInfo, error) {
+	rows, err := m.db.Query(projectColumns+`WHERE EXISTS (
+			SELECT 1 FROM project_members pm2
+			WHERE pm2.project_id = p.id AND pm2.user_id = ?
+		) ORDER BY p.created_at DESC, p.name ASC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ProjectInfo{}
+	for rows.Next() {
+		info, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SetSubmissionsOpen lets the owner start or stop student submissions.
+func (m *Manager) SetSubmissionsOpen(projectID string, open bool) (ProjectInfo, error) {
+	if _, err := m.projectDir(projectID); err != nil {
+		return ProjectInfo{}, err
+	}
+	value := 0
+	if open {
+		value = 1
+	}
+	if _, err := m.db.Exec(`UPDATE projects SET submissions_open = ? WHERE id = ?`, value, projectID); err != nil {
+		return ProjectInfo{}, err
+	}
+	return m.info(projectID)
+}
+
+// Create makes a new project owned by the default seeded user. It is used by
+// the legacy folder importer, where there is no interactive owner.
 func (m *Manager) Create(name string) (ProjectInfo, error) {
 	return m.CreateForOwner(name, DefaultUserID)
 }
 
 // CreateForOwner makes a new project and records its owner.
 func (m *Manager) CreateForOwner(name, ownerID string) (ProjectInfo, error) {
-	name, err := validateProjectName(name)
+	return m.CreateProject(ProjectPlan{Name: name}, ownerID)
+}
+
+// ProjectPlan is what a teacher defines when creating a project: its name, the
+// classes students must label against, the students who may submit, and whether
+// submissions are open right away.
+type ProjectPlan struct {
+	Name            string   `json:"name"`
+	Classes         []string `json:"classes"`
+	Members         []string `json:"members"`
+	SubmissionsOpen bool     `json:"submissions_open"`
+}
+
+// CreateProject builds a project from a plan. Class names are validated before
+// anything is written, so a bad plan never leaves a half-created project.
+func (m *Manager) CreateProject(plan ProjectPlan, ownerID string) (ProjectInfo, error) {
+	name, err := validateProjectName(plan.Name)
 	if err != nil {
 		return ProjectInfo{}, err
+	}
+	classes, err := cleanClassNames(plan.Classes)
+	if err != nil {
+		return ProjectInfo{}, err
+	}
+	if len(classes) > maxClasses {
+		return ProjectInfo{}, fmt.Errorf("%w: at most %d classes", ErrInvalid, maxClasses)
 	}
 	if ownerID == "" {
 		ownerID = DefaultUserID
 	}
-	if _, err := m.User(ownerID); err != nil {
+	owner, err := m.User(ownerID)
+	if err != nil {
 		return ProjectInfo{}, err
 	}
+	if owner.Role != auth.RoleTeacher {
+		return ProjectInfo{}, fmt.Errorf("%w: only teachers can create projects", ErrForbidden)
+	}
+	// Resolve members up front so an unknown id fails before any write.
+	members := make([]User, 0, len(plan.Members))
+	seen := map[string]struct{}{}
+	for _, id := range plan.Members {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return ProjectInfo{}, fmt.Errorf("%w: member id must not be empty", ErrInvalid)
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		u, err := m.User(id)
+		if err != nil {
+			return ProjectInfo{}, err
+		}
+		if u.Role != auth.RoleStudent {
+			return ProjectInfo{}, fmt.Errorf("%w: only students can join a project", ErrInvalid)
+		}
+		members = append(members, u)
+	}
+
 	id, err := newProjectID()
 	if err != nil {
 		return ProjectInfo{}, err
@@ -192,9 +277,43 @@ func (m *Manager) CreateForOwner(name, ownerID string) (ProjectInfo, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "images"), 0o755); err != nil {
 		return ProjectInfo{}, err
 	}
-	created := time.Now().UTC()
-	if _, err := m.db.Exec(`INSERT INTO projects (id, name, created_at, owner_id) VALUES (?, ?, ?, ?)`,
-		id, name, formatTime(created), ownerID); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
+		os.RemoveAll(dir)
+		return ProjectInfo{}, err
+	}
+
+	tx, err := m.db.Begin()
+	if err != nil {
+		os.RemoveAll(dir)
+		return ProjectInfo{}, err
+	}
+	defer tx.Rollback()
+
+	open := 0
+	if plan.SubmissionsOpen {
+		open = 1
+	}
+	created := formatTime(time.Now().UTC())
+	if _, err := tx.Exec(`INSERT INTO projects (id, name, created_at, owner_id, submissions_open)
+		VALUES (?, ?, ?, ?, ?)`, id, name, created, ownerID, open); err != nil {
+		os.RemoveAll(dir)
+		return ProjectInfo{}, err
+	}
+	for classID, className := range classes {
+		if _, err := tx.Exec(`INSERT INTO classes (project_id, class_id, name) VALUES (?, ?, ?)`,
+			id, classID, className); err != nil {
+			os.RemoveAll(dir)
+			return ProjectInfo{}, err
+		}
+	}
+	for _, u := range members {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO project_members (project_id, user_id, added_by, created_at)
+			VALUES (?, ?, ?, ?)`, id, u.ID, ownerID, created); err != nil {
+			os.RemoveAll(dir)
+			return ProjectInfo{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		os.RemoveAll(dir)
 		return ProjectInfo{}, err
 	}
@@ -263,52 +382,58 @@ type ProjectTrash struct {
 	Images  []ImageInfo `json:"images"`
 }
 
-// Trash lists trashed images grouped by project, newest project first. Every
-// group carries the project metadata so the UI can show which project an image
-// came from and whether the current user owns it.
-func (m *Manager) Trash() ([]ProjectTrash, error) {
-	rows, err := m.db.Query(`
-		SELECT p.id
-		FROM projects p
-		WHERE EXISTS (
-			SELECT 1 FROM images i WHERE i.project_id = p.id AND i.deleted_at <> ''
-		)
-		ORDER BY p.created_at DESC, p.name ASC`)
-	if err != nil {
-		return nil, err
-	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-
+// trashGroups builds the trash view for the given projects. An uploader filter
+// narrows the images to that account's own photos, which is what a student may
+// look at. Projects whose trash is empty (for this viewer) are skipped.
+func (m *Manager) trashGroups(projects []ProjectInfo, uploader string) ([]ProjectTrash, error) {
 	groups := []ProjectTrash{}
-	for _, id := range ids {
-		info, err := m.info(id)
+	for _, info := range projects {
+		store, err := m.Store(info.ID)
 		if err != nil {
 			return nil, err
 		}
-		store, err := m.Store(id)
+		images, err := store.TrashedImagesBy(uploader)
 		if err != nil {
 			return nil, err
 		}
-		images, err := store.TrashedImages()
-		if err != nil {
-			return nil, err
+		if len(images) == 0 {
+			continue
 		}
 		groups = append(groups, ProjectTrash{Project: info, Images: images})
 	}
 	return groups, nil
+}
+
+// Trash lists the trash of every project. Server code and tests use this;
+// HTTP handlers must call TrashForUser so accounts only see their own scope.
+func (m *Manager) Trash() ([]ProjectTrash, error) {
+	projects, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+	return m.trashGroups(projects, "")
+}
+
+// TrashForUser limits the trash to what one account may act on: a teacher sees
+// the projects they own, a student only photos of their own inside projects
+// they belong to.
+func (m *Manager) TrashForUser(userID string) ([]ProjectTrash, error) {
+	u, err := m.User(userID)
+	if err != nil {
+		return nil, err
+	}
+	if u.Role == auth.RoleTeacher {
+		projects, err := m.ownedProjects(userID)
+		if err != nil {
+			return nil, err
+		}
+		return m.trashGroups(projects, "")
+	}
+	projects, err := m.memberProjects(userID)
+	if err != nil {
+		return nil, err
+	}
+	return m.trashGroups(projects, userID)
 }
 
 // ImportLegacy copies the old single-workspace folder into a new project.
@@ -383,29 +508,14 @@ func (m *Manager) ImportLegacy(legacyDir, name string) (ProjectInfo, bool, error
 }
 
 func (m *Manager) info(id string) (ProjectInfo, error) {
-	var info ProjectInfo
-	var created string
-	err := m.db.QueryRow(`
-		SELECT p.id, p.name, p.created_at, p.owner_id,
-			COALESCE(u.username, ''), COALESCE(u.display_name, ''),
-			(SELECT COUNT(*) FROM images i WHERE i.project_id = p.id AND i.deleted_at = ''),
-			(SELECT COUNT(*) FROM labels l
-			 JOIN images i2 ON i2.project_id = l.project_id AND i2.name = l.image_name
-			 WHERE l.project_id = p.id AND i2.deleted_at = ''),
-			(SELECT COUNT(*) FROM classes c WHERE c.project_id = p.id)
-		FROM projects p
-		LEFT JOIN users u ON u.id = p.owner_id
-		WHERE p.id = ?`, id).
-		Scan(&info.ID, &info.Name, &created, &info.OwnerID,
-			&info.OwnerUsername, &info.OwnerName,
-			&info.ImageCount, &info.BoxCount, &info.ClassCount)
+	row := m.db.QueryRow(projectColumns+`WHERE p.id = ?`, id)
+	info, err := scanProject(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProjectInfo{}, fmt.Errorf("%w: project %s", ErrNotFound, id)
 	}
 	if err != nil {
 		return ProjectInfo{}, err
 	}
-	info.CreatedAt = parseTime(created)
 	return info, nil
 }
 
@@ -425,7 +535,45 @@ func (m *Manager) projectDir(id string) (string, error) {
 	if err := os.MkdirAll(filepath.Join(dir, "images"), 0o755); err != nil {
 		return "", err
 	}
+	// Projects created before the review flow had no staging folder; opening
+	// one today upgrades it in place.
+	if err := os.MkdirAll(filepath.Join(dir, "staging"), 0o755); err != nil {
+		return "", err
+	}
 	return dir, nil
+}
+
+// ownedProjects lists the projects one teacher owns, newest first.
+func (m *Manager) ownedProjects(ownerID string) ([]ProjectInfo, error) {
+	rows, err := m.db.Query(projectColumns+`WHERE p.owner_id = ? ORDER BY p.created_at DESC, p.name ASC`,
+		ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []ProjectInfo{}
+	for rows.Next() {
+		info, err := scanProject(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, info)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// InProject reports whether userID may act inside projectID at all: the owner
+// always can, a student only when they were added as a member.
+func (m *Manager) InProject(projectID, userID string) (bool, error) {
+	access, err := m.Access(projectID, userID)
+	if err != nil {
+		return false, err
+	}
+	return access.IsOwner || access.IsMember, nil
 }
 
 func validateProjectName(name string) (string, error) {

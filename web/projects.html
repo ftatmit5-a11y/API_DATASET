@@ -10,13 +10,16 @@
   <header class="app-header">
     <div>
       <h1>Projects</h1>
-      <p class="subtitle">แต่ละ project เก็บรูปและ label แยกกัน เพิ่มรูปได้เรื่อยๆ แล้วค่อยทำ data ทีเดียว</p>
+      <p class="subtitle">อาจารย์กำหนด class ตั้งแต่ตอนสร้าง project · นักศึกษาส่งรูปเข้าแล้วรออนุมัติ</p>
     </div>
     <nav>
-      <select id="user-select" class="user-select" aria-label="ผู้ใช้จำลอง"></select>
-      <a href="/">Dataset Builder</a>
-      <a href="/annotate.html">Annotation Studio</a>
-      <a href="/trash.html">ถังขยะ</a>
+      <span id="identity" class="identity"></span>
+      <a href="/pending.html" data-teacher-only>งานรออนุมัติ</a>
+      <a href="/" data-teacher-only>Dataset Builder</a>
+      <a href="/annotate.html" data-teacher-only>Annotation Studio</a>
+      <a href="/trash.html" data-teacher-only>ถังขยะ</a>
+      <a href="/users.html" data-teacher-only>บัญชี</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
     </nav>
   </header>
 
@@ -25,11 +28,39 @@
       <div class="section-head">
         <h2>สร้าง project ใหม่</h2>
       </div>
-      <form id="project-form" class="inline-form">
-        <input id="project-name" type="text" placeholder="ชื่อ project เช่น งานวิจัยปลา" maxlength="80" required>
-        <button type="submit">สร้าง project</button>
+      <form id="project-form" class="stack-form">
+        <label>
+          ชื่อ project
+          <input id="project-name" type="text" placeholder="เช่น งานวิจัยปลาบึก ปี 2569" maxlength="80" required>
+        </label>
+
+        <div class="field-group">
+          <div class="section-head">
+            <h3>คลาสที่ต้องการ (<span id="class-count">0</span>)</h3>
+            <button id="add-class-row" type="button" class="ghost">+ เพิ่มคลาส</button>
+          </div>
+          <div id="class-rows" class="class-rows"></div>
+          <p class="hint">
+            ใส่ชื่อทุกคลาสที่จะให้นักศึกษาวาด เช่น <code>roach</code>, <code>catfish</code> ·
+            ภายหลังแก้ได้เฉพาะอาจารย์เจ้าของ project เท่านั้น
+          </p>
+        </div>
+
+        <div class="field-group">
+          <div class="section-head">
+            <h3>นักศึกษาใน project</h3>
+          </div>
+          <div id="student-picker" class="student-picker"></div>
+          <p class="hint">เลือกนักศึกษาที่จะส่งรูปเข้า project นี้ได้ (เลือกภายหลังก็ได้)</p>
+        </div>
+
+        <label class="checkbox-row">
+          <input id="open-now" type="checkbox" checked>
+          เปิดรับรูปจากนักศึกษาทันทีที่สร้าง
+        </label>
+
+        <button type="submit" class="primary-btn">สร้าง project</button>
       </form>
-      <p class="hint">สร้างแล้ว project จะแสดงในรายการด้านล่าง กดเข้าไปเพื่อเพิ่มรูปและวาด label</p>
     </section>
 
     <section class="project-section">

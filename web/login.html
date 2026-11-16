@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body auth-body">
+  <main class="auth-card">
+    <h1>YOLO Annotation</h1>
+    <p class="subtitle">เข้าสู่ระบบด้วยบัญชีอาจารย์หรือนักศึกษา</p>
+
+    <form id="login-form" class="stack-form" autocomplete="on">
+      <label>
+        ชื่อผู้ใช้
+        <input id="login-username" name="username" type="text" autocomplete="username" required maxlength="32">
+      </label>
+      <label>
+        รหัสผ่าน
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+      </label>
+      <button id="login-submit" type="submit" class="primary-btn">เข้าสู่ระบบ</button>
+    </form>
+
+    <p id="login-error" class="form-error" hidden></p>
+    <p class="hint">บัญชีเริ่มต้นที่ระบบสร้างให้เมื่อเปิดใช้เป็นครั้งแรก ควรเปลี่ยนรหัสผ่านทันทีหลังเข้าได้ (เมนู “บัญชี”)</p>
+  </main>
+
+  <script src="common.js"></script>
+  <script src="login.js"></script>
+</body>
+</html>

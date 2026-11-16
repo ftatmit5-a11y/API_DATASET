@@ -1,10 +1,8 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -21,33 +19,44 @@ func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/projects.html", http.StatusTemporaryRedirect)
 }
 
-func (s *Server) projectPage(w http.ResponseWriter, r *http.Request) {
-	target := "/project.html"
+// pageRedirect forwards a short URL to its static page and keeps the query.
+func pageRedirect(w http.ResponseWriter, r *http.Request, page string) {
+	target := "/" + page + ".html"
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
 	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+}
+
+func (s *Server) projectPage(w http.ResponseWriter, r *http.Request) {
+	pageRedirect(w, r, "project")
 }
 
 func (s *Server) trashPage(w http.ResponseWriter, r *http.Request) {
-	target := "/trash.html"
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
-	}
-	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+	pageRedirect(w, r, "trash")
 }
 
-func (s *Server) usersList(w http.ResponseWriter, _ *http.Request) {
-	users, err := s.Projects.Users()
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+func (s *Server) pendingPage(w http.ResponseWriter, r *http.Request) {
+	pageRedirect(w, r, "pending")
 }
 
-func (s *Server) trashList(w http.ResponseWriter, _ *http.Request) {
-	groups, err := s.Projects.Trash()
+func (s *Server) myWorkPage(w http.ResponseWriter, r *http.Request) {
+	pageRedirect(w, r, "mywork")
+}
+
+func (s *Server) usersPage(w http.ResponseWriter, r *http.Request) {
+	pageRedirect(w, r, "users")
+}
+
+func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
+	pageRedirect(w, r, "login")
+}
+
+// trashList shows only what the signed-in account may act on: a teacher sees
+// the trash of the projects they own, a student sees only photos of theirs that
+// were rejected or deleted.
+func (s *Server) trashList(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.Projects.TrashForUser(currentUser(r).ID)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -55,8 +64,8 @@ func (s *Server) trashList(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"projects": groups})
 }
 
-func (s *Server) projectsList(w http.ResponseWriter, _ *http.Request) {
-	projects, err := s.Projects.List()
+func (s *Server) projectsList(w http.ResponseWriter, r *http.Request) {
+	projects, err := s.Projects.ListVisible(currentUser(r).ID)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -65,19 +74,17 @@ func (s *Server) projectsList(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) projectCreate(w http.ResponseWriter, r *http.Request) {
-	user, err := s.requestUser(r)
-	if err != nil {
+	user := currentUser(r)
+	if err := s.requireTeacher(r); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
-	var req struct {
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	var plan annotation.ProjectPlan
+	if err := decodeJSON(r, &plan); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	info, err := s.Projects.CreateForOwner(req.Name, user.ID)
+	info, err := s.Projects.CreateProject(plan, user.ID)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -85,13 +92,11 @@ func (s *Server) projectCreate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, info)
 }
 
+// projectGet returns the project plus the parts the caller may see. A student
+// gets the class list and only their own approved photos; the teacher who owns
+// the project also gets every photo and the trash.
 func (s *Server) projectGet(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	info, err := s.Projects.Info(id)
+	access, store, err := s.projectAccess(r)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -111,33 +116,46 @@ func (s *Server) projectGet(w http.ResponseWriter, r *http.Request) {
 		writeAnnotationErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, annotation.ProjectState{
-		ProjectInfo: info,
+
+	if !access.IsOwner {
+		images = filterImagesByUploader(images, access.User.ID)
+		trash = []annotation.ImageInfo{}
+	}
+
+	state := annotation.ProjectState{
+		ProjectInfo: access.Project,
 		Classes:     classes,
 		Images:      images,
 		Trash:       trash,
-	})
+	}
+	state.CanReview = access.CanReview()
+	state.CanSubmit = access.CanSubmit()
+	writeJSON(w, http.StatusOK, state)
+}
+
+func filterImagesByUploader(images []annotation.ImageInfo, userID string) []annotation.ImageInfo {
+	out := make([]annotation.ImageInfo, 0, len(images))
+	for _, img := range images {
+		if img.UploadedBy == userID {
+			out = append(out, img)
+		}
+	}
+	return out
 }
 
 func (s *Server) projectRename(w http.ResponseWriter, r *http.Request) {
-	user, err := s.requestUser(r)
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	id := r.PathValue("id")
-	if err := s.Projects.CheckOwner(id, user.ID); err != nil {
+	if _, _, err := s.projectOwnerAccess(r); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	info, err := s.Projects.Rename(id, req.Name)
+	info, err := s.Projects.Rename(r.PathValue("id"), req.Name)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -146,16 +164,11 @@ func (s *Server) projectRename(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) projectDelete(w http.ResponseWriter, r *http.Request) {
-	user, err := s.requestUser(r)
-	if err != nil {
+	if _, _, err := s.projectOwnerAccess(r); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.Projects.CheckOwner(id, user.ID); err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
 	if err := s.Projects.Delete(id); err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -163,13 +176,10 @@ func (s *Server) projectDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"deleted": id})
 }
 
+// projectUploadImages is the teacher's own import path. Students reach the same
+// photos through submissions, which keeps unreviewed work out of the dataset.
 func (s *Server) projectUploadImages(w http.ResponseWriter, r *http.Request) {
-	store, _, err := s.projectStore(r)
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	user, err := s.requestUser(r)
+	access, store, err := s.projectOwnerAccess(r)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -203,7 +213,7 @@ func (s *Server) projectUploadImages(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "could not read uploaded image")
 			return
 		}
-		name, err := store.AddImage(header.Filename, user.ID, file)
+		name, err := store.AddImage(header.Filename, access.User.ID, file)
 		file.Close()
 		if err != nil {
 			writeAnnotationErr(w, err)
@@ -215,8 +225,12 @@ func (s *Server) projectUploadImages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) projectServeImage(w http.ResponseWriter, r *http.Request) {
-	store, _, err := s.projectStore(r)
+	access, store, err := s.projectAccess(r)
 	if err != nil {
+		writeAnnotationErr(w, err)
+		return
+	}
+	if _, err := s.visibleImage(r, access, store); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
@@ -228,13 +242,15 @@ func (s *Server) projectServeImage(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, p)
 }
 
+// projectTrashImage soft-deletes one photo. The owner may trash any photo;
+// a student may only remove their own.
 func (s *Server) projectTrashImage(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
+	access, store, err := s.projectAccess(r)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
-	img, err := s.imageForMutation(r, store, id)
+	img, err := s.imageForMutation(r, access, store)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -246,13 +262,15 @@ func (s *Server) projectTrashImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"trashed": img.Name})
 }
 
+// projectRestoreImage brings a trashed photo back. Only the owner may do it:
+// a student whose rejected submission was restored would skip the review step.
 func (s *Server) projectRestoreImage(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
+	_, store, err := s.projectOwnerAccess(r)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
-	img, err := s.imageForMutation(r, store, id)
+	img, err := s.imageForName(r, store)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -265,19 +283,8 @@ func (s *Server) projectRestoreImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) projectPurgeImage(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
+	_, store, err := s.projectOwnerAccess(r)
 	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	user, err := s.requestUser(r)
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	// Purging is destructive and cannot be undone, so only the project owner
-	// may do it. Uploaders can still restore their own images.
-	if err := s.Projects.CheckOwner(id, user.ID); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
@@ -298,30 +305,48 @@ func (s *Server) projectPurgeImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"deleted": img.Name})
 }
 
-// imageForMutation loads an image and checks that the current user is allowed
-// to change it (project owner or the user who uploaded it).
-func (s *Server) imageForMutation(r *http.Request, store *annotation.Store, projectID string) (annotation.ImageInfo, error) {
-	user, err := s.requestUser(r)
-	if err != nil {
-		return annotation.ImageInfo{}, err
-	}
+// imageForName loads the image named in the path.
+func (s *Server) imageForName(r *http.Request, store *annotation.Store) (annotation.ImageInfo, error) {
 	img, err := store.Image(r.PathValue("name"))
 	if err != nil {
 		return annotation.ImageInfo{}, err
 	}
-	info, err := s.Projects.Info(projectID)
+	return img, nil
+}
+
+// imageForMutation loads the image named in the path and checks the caller may
+// change it: the project owner always can, others only their own uploads.
+func (s *Server) imageForMutation(r *http.Request, access annotation.ProjectAccess, store *annotation.Store) (annotation.ImageInfo, error) {
+	img, err := s.imageForName(r, store)
 	if err != nil {
 		return annotation.ImageInfo{}, err
 	}
-	if info.OwnerID != user.ID && img.UploadedBy != user.ID {
+	if !access.IsOwner && img.UploadedBy != access.User.ID {
 		return annotation.ImageInfo{}, fmt.Errorf("%w: only the project owner or uploader can change this image", annotation.ErrForbidden)
 	}
 	return img, nil
 }
 
-func (s *Server) projectGetLabels(w http.ResponseWriter, r *http.Request) {
-	store, _, err := s.projectStore(r)
+// visibleImage enforces photo privacy for reads: teachers see everything, a
+// student only the photos they uploaded themselves.
+func (s *Server) visibleImage(r *http.Request, access annotation.ProjectAccess, store *annotation.Store) (annotation.ImageInfo, error) {
+	img, err := s.imageForName(r, store)
 	if err != nil {
+		return annotation.ImageInfo{}, err
+	}
+	if !access.IsTeacher && img.UploadedBy != access.User.ID {
+		return annotation.ImageInfo{}, fmt.Errorf("%w: this photo belongs to another student", annotation.ErrForbidden)
+	}
+	return img, nil
+}
+
+func (s *Server) projectGetLabels(w http.ResponseWriter, r *http.Request) {
+	access, store, err := s.projectAccess(r)
+	if err != nil {
+		writeAnnotationErr(w, err)
+		return
+	}
+	if _, err := s.visibleImage(r, access, store); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
@@ -334,8 +359,10 @@ func (s *Server) projectGetLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"image": name, "labels": labels})
 }
 
+// projectPutLabels edits boxes of photos already inside the project. Keeping
+// this with the owner means student work only enters through a decision.
 func (s *Server) projectPutLabels(w http.ResponseWriter, r *http.Request) {
-	store, _, err := s.projectStore(r)
+	_, store, err := s.projectOwnerAccess(r)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
@@ -343,7 +370,7 @@ func (s *Server) projectPutLabels(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Labels []annotation.Label `json:"labels"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -355,25 +382,18 @@ func (s *Server) projectPutLabels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"image": name, "saved": len(req.Labels)})
 }
 
+// projectAddClass appends one class. Classes belong to the teacher who created
+// the project: students label against a fixed list.
 func (s *Server) projectAddClass(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
+	_, store, err := s.projectOwnerAccess(r)
 	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	user, err := s.requestUser(r)
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	if err := s.Projects.CheckOwner(id, user.ID); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
 	var req struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -396,24 +416,15 @@ func (s *Server) projectAddClass(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) projectPutClasses(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
+	_, store, err := s.projectOwnerAccess(r)
 	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	user, err := s.requestUser(r)
-	if err != nil {
-		writeAnnotationErr(w, err)
-		return
-	}
-	if err := s.Projects.CheckOwner(id, user.ID); err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
 	var req struct {
 		Classes []string `json:"classes"`
 	}
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -429,12 +440,15 @@ func (s *Server) projectPutClasses(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"classes": classes})
 }
 
+// projectExport builds the YOLO ZIP. Only the owner exports, so a student
+// cannot pull the reviewed dataset of a course they are taking.
 func (s *Server) projectExport(w http.ResponseWriter, r *http.Request) {
-	store, id, err := s.projectStore(r)
+	_, store, err := s.projectOwnerAccess(r)
 	if err != nil {
 		writeAnnotationErr(w, err)
 		return
 	}
+	id := r.PathValue("id")
 	tmp, err := os.CreateTemp("", "yolo-annotations-*.zip")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create archive")
@@ -456,18 +470,34 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, name)
 }
 
-func (s *Server) projectStore(r *http.Request) (*annotation.Store, string, error) {
-	id := r.PathValue("id")
-	store, err := s.Projects.Store(id)
-	return store, id, err
+// projectAccess resolves the signed-in account's relationship to the project in
+// the path and opens its store. Being the owner or a listed member is enough.
+func (s *Server) projectAccess(r *http.Request) (annotation.ProjectAccess, *annotation.Store, error) {
+	access, err := s.Projects.Access(r.PathValue("id"), currentUser(r).ID)
+	if err != nil {
+		return access, nil, err
+	}
+	if !access.IsOwner && !access.IsMember {
+		return access, nil, fmt.Errorf("%w: you are not part of this project", annotation.ErrForbidden)
+	}
+	store, err := s.Projects.Store(access.Project.ID)
+	if err != nil {
+		return access, nil, err
+	}
+	return access, store, nil
 }
 
-// requestUser resolves the simulated account selected by the web UI. Requests
-// without the header fall back to the seeded default user so existing scripts
-// keep working.
-func (s *Server) requestUser(r *http.Request) (annotation.User, error) {
-	id := strings.TrimSpace(r.Header.Get("X-User-ID"))
-	return s.Projects.User(id)
+// projectOwnerAccess is the stricter form used for classes, imports, exports,
+// label edits, restoring, and purging.
+func (s *Server) projectOwnerAccess(r *http.Request) (annotation.ProjectAccess, *annotation.Store, error) {
+	access, store, err := s.projectAccess(r)
+	if err != nil {
+		return access, store, err
+	}
+	if !access.IsOwner {
+		return access, store, fmt.Errorf("%w: only the project owner can do this", annotation.ErrForbidden)
+	}
+	return access, store, nil
 }
 
 func writeAnnotationErr(w http.ResponseWriter, err error) {

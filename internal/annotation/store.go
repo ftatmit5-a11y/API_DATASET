@@ -30,6 +30,7 @@ var (
 const (
 	maxImageBytes = 64 << 20 // 64 MiB per image
 	coordEpsilon  = 1e-6
+	maxClasses    = 200 // a project class list stays short enough to click through
 )
 
 var imageExts = map[string]struct{}{
@@ -139,17 +140,31 @@ func (s *Store) Images() ([]ImageInfo, error) {
 	return out, nil
 }
 
-// TrashedImages lists images in the trash, most recently deleted first.
+// TrashedImages lists every image in the trash, most recently deleted first.
 func (s *Store) TrashedImages() ([]ImageInfo, error) {
-	rows, err := s.db.Query(`
+	return s.TrashedImagesBy("")
+}
+
+// TrashedImagesBy lists trashed images. An uploader of "" means every account;
+// otherwise only photos uploaded by that user are returned, which is what a
+// student is allowed to see of a project's trash.
+func (s *Store) TrashedImagesBy(uploader string) ([]ImageInfo, error) {
+	query := `
 		SELECT i.id, i.name, i.original_name, i.uploaded_by,
 			COALESCE(u.display_name, ''), i.created_at, i.deleted_at,
 			(SELECT COUNT(*) FROM labels l
 			 WHERE l.project_id = i.project_id AND l.image_name = i.name)
 		FROM images i
 		LEFT JOIN users u ON u.id = i.uploaded_by
-		WHERE i.project_id = ? AND i.deleted_at <> ''
-		ORDER BY i.deleted_at DESC, lower(i.original_name), lower(i.name)`, s.projectID)
+		WHERE i.project_id = ? AND i.deleted_at <> ''`
+	args := []any{s.projectID}
+	if uploader != "" {
+		query += ` AND i.uploaded_by = ?`
+		args = append(args, uploader)
+	}
+	query += ` ORDER BY i.deleted_at DESC, lower(i.original_name), lower(i.name)`
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -469,25 +484,38 @@ func (s *Store) Classes() ([]string, error) {
 	return names, nil
 }
 
-// SaveClasses replaces the class list after checking that existing labels still
-// reference valid class ids.
-func (s *Store) SaveClasses(names []string) error {
+// cleanClassNames trims and validates a class list, rejecting blanks and
+// case-insensitive duplicates. Class ids are positions in the returned slice.
+func cleanClassNames(names []string) ([]string, error) {
 	cleaned := make([]string, 0, len(names))
 	seen := map[string]struct{}{}
 	for _, n := range names {
 		n = strings.TrimSpace(n)
 		if n == "" {
-			return fmt.Errorf("%w: class name must not be empty", ErrInvalid)
+			return nil, fmt.Errorf("%w: class name must not be empty", ErrInvalid)
 		}
 		if strings.ContainsAny(n, "\r\n") {
-			return fmt.Errorf("%w: class name must be one line", ErrInvalid)
+			return nil, fmt.Errorf("%w: class name must be one line", ErrInvalid)
+		}
+		if len([]rune(n)) > 80 {
+			return nil, fmt.Errorf("%w: class name %q is too long", ErrInvalid, n)
 		}
 		key := strings.ToLower(n)
 		if _, dup := seen[key]; dup {
-			return fmt.Errorf("%w: duplicate class name %q", ErrInvalid, n)
+			return nil, fmt.Errorf("%w: duplicate class name %q", ErrInvalid, n)
 		}
 		seen[key] = struct{}{}
 		cleaned = append(cleaned, n)
+	}
+	return cleaned, nil
+}
+
+// SaveClasses replaces the class list after checking that existing labels still
+// reference valid class ids.
+func (s *Store) SaveClasses(names []string) error {
+	cleaned, err := cleanClassNames(names)
+	if err != nil {
+		return err
 	}
 
 	old, err := s.Classes()

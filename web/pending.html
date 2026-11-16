@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>งานรออนุมัติ</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="annotate-body">
+  <header class="app-header">
+    <div>
+      <h1>งานรออนุมัติ</h1>
+      <p class="subtitle">รูปที่นักศึกษาวาดกรอบส่งมา · ยังไม่เข้า dataset จนกว่าอาจารย์อนุมัติ</p>
+    </div>
+    <nav>
+      <span id="identity" class="identity"></span>
+      <a href="/mywork.html">งานของฉัน</a>
+      <a href="/projects.html" data-teacher-only>Projects</a>
+      <a href="/trash.html" data-teacher-only>ถังขยะ</a>
+      <a href="/users.html" data-teacher-only>บัญชี</a>
+      <button id="logout-btn" type="button" class="ghost">ออกจากระบบ</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel pending-head-panel">
+      <div class="section-head">
+        <h2>รอตรวจ <span id="pending-total" class="badge">0</span></h2>
+        <div class="toolbar-right">
+          <label class="filter-label">
+            project
+            <select id="project-filter" class="user-select"></select>
+          </label>
+          <button id="refresh-btn" type="button" class="ghost">รีเฟรช</button>
+        </div>
+      </div>
+      <p class="hint">
+        กด “ตรวจรูปนี้” เพื่อเปิดรูปพร้อมกรอบที่นักศึกษาวาด แล้วสั่ง <strong>อนุมัติ</strong> (รูปเข้า project)
+        หรือ <strong>ไม่ผ่าน</strong> (รูปเข้าถังขยะของ project พร้อมเหตุผลที่นักศึกษาเห็น)
+      </p>
+    </section>
+
+    <div id="pending-groups" class="trash-groups"></div>
+    <p id="pending-empty" class="empty-note" hidden>ไม่มีรูปรออนุมัติตอนนี้ — นักศึกษาที่ยังไม่ส่งงานจะไม่มาแสดงในหน้านี้</p>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="common.js"></script>
+  <script src="pending.js"></script>
+</body>
+</html>

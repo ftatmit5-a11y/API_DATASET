@@ -36,12 +36,7 @@ function pct(v) {
   return Number.isFinite(n) ? Math.round(n * 100) + '%' : '';
 }
 
-function fmtDate(v) {
-  if (!v) return '';
-  const dt = new Date(v);
-  if (Number.isNaN(dt.getTime())) return String(v);
-  return dt.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
-}
+// fmtDate comes from common.js.
 
 function describe(d) {
   const s = summaryOf(d);
@@ -117,9 +112,7 @@ function classCell(s) {
 
 async function load() {
   try {
-    const res = await fetch('/api/datasets');
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
+    const data = await api('/api/datasets');
 
     // รองรับทั้งแบบ [ ... ] และแบบ { "datasets": [ ... ] }
     const items = Array.isArray(data) ? data : (data.datasets || []);
@@ -178,18 +171,10 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   setMsg('กำลังอัปโหลด...', false);
   try {
-    const res = await fetch('/api/datasets', {
+    const created = await api('/api/datasets', {
       method: 'POST',
       body: new FormData(form),
     });
-    const text = await res.text();
-    if (!res.ok) throw new Error(text);
-    let created;
-    try {
-      created = JSON.parse(text);
-    } catch {
-      created = null;
-    }
     const detail = created ? describe(created) : '';
     setMsg('อัปโหลดสำเร็จ' + (detail ? ' — ' + detail : ''), false);
     form.reset();
@@ -204,13 +189,23 @@ list.addEventListener('click', async (e) => {
   if (!id) return;
   if (!confirm('ลบ dataset ' + id + ' ?')) return;
   try {
-    const res = await fetch('/api/datasets/' + encodeURIComponent(id), { method: 'DELETE' });
-    if (!res.ok) throw new Error(await res.text());
+    await api('/api/datasets/' + encodeURIComponent(id), { method: 'DELETE' });
     setMsg('ลบแล้ว', false);
   } catch (err) {
     setMsg('ลบไม่สำเร็จ: ' + err.message, true);
   }
   load();
 });
+
+// Dataset building is teacher work; students are sent to their own page.
+(async function boot() {
+  const user = await requireUser('teacher');
+  if (!user) return;
+  renderIdentity(user, {
+    identity: document.getElementById('identity'),
+    logoutBtn: document.getElementById('logout-btn'),
+  });
+  load();
+})();
 
 load();

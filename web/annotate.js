@@ -18,6 +18,10 @@ const state = {
   dirty: false,
   img: null,
   loadToken: 0,
+  // Submission mode: the canvas edits a student photo that has not been
+  // approved into the project yet.
+  submission: null,
+  queue: [],
 };
 
 const el = {
@@ -46,7 +50,16 @@ const el = {
   toast: document.getElementById('toast'),
   exportLink: document.getElementById('export-link'),
   trashLink: document.getElementById('trash-link'),
-  userSelect: document.getElementById('user-select'),
+  identity: document.getElementById('identity'),
+  logoutBtn: document.getElementById('logout-btn'),
+  submissionBar: document.getElementById('submission-bar'),
+  submissionStatus: document.getElementById('submission-status'),
+  submissionMeta: document.getElementById('submission-meta'),
+  submissionBack: document.getElementById('submission-back'),
+  submissionSubmit: document.getElementById('submission-submit'),
+  submissionWithdraw: document.getElementById('submission-withdraw'),
+  submissionApprove: document.getElementById('submission-approve'),
+  submissionReject: document.getElementById('submission-reject'),
 };
 
 const ctx = el.canvas.getContext('2d');
@@ -62,22 +75,8 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
 // ---------- helpers ----------
 
-async function api(path, options) {
-  const res = await userFetch(path, options);
-  const text = await res.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = null;
-    }
-  }
-  if (!res.ok) {
-    throw new Error((data && data.error) || text || res.statusText);
-  }
-  return data;
-}
+// api() comes from common.js: it adds the CSRF header and sends the browser to
+// the login page when the session has expired.
 
 function toast(text, isError = false) {
   el.toast.textContent = text;
@@ -123,12 +122,34 @@ function projectUrl(suffix) {
   return `/api/projects/${encodeURIComponent(projectId())}${suffix}`;
 }
 
-function updateUrl(projectID, imageName) {
+function submissionUrl(suffix) {
+  const sub = state.submission;
+  if (!sub) return '';
+  return `${projectUrl('/submissions')}/${encodeURIComponent(sub.id)}${suffix}`;
+}
+
+// inSubmissionMode is the single switch the canvas code checks: a submission is
+// a student photo that has not been approved into the dataset yet.
+function inSubmissionMode() {
+  return Boolean(state.submission);
+}
+
+function isSubmissionEditable() {
+  return Boolean(state.submission && state.submission.can_edit);
+}
+
+function updateUrl(projectID, imageName, submissionID) {
   const url = new URL(window.location.href);
   if (projectID) url.searchParams.set('project', projectID);
   else url.searchParams.delete('project');
-  if (imageName) url.searchParams.set('image', imageName);
-  else url.searchParams.delete('image');
+  if (submissionID) {
+    url.searchParams.set('submission', submissionID);
+    url.searchParams.delete('image');
+  } else {
+    url.searchParams.delete('submission');
+    if (imageName) url.searchParams.set('image', imageName);
+    else url.searchParams.delete('image');
+  }
   history.replaceState(null, '', url);
 }
 
@@ -151,22 +172,29 @@ function renderToolbar() {
     el.activeClass.style.borderColor = '';
   }
 
+  const reviewing = inSubmissionMode();
+  const editable = !reviewing || isSubmissionEditable();
+
   el.dirty.textContent = state.dirty ? 'ยังไม่บันทึก' : '';
   el.dirty.classList.toggle('visible', state.dirty);
-  el.currentImage.textContent = state.currentImage || 'ยังไม่ได้เลือกรูป';
-  el.saveBtn.disabled = !hasProject || saving || !state.dirty || !state.currentImage;
-  el.clearBoxes.disabled = !hasProject || state.boxes.length === 0;
+  el.currentImage.textContent = reviewing
+    ? (state.submission.original_name || 'กำลังโหลด...') + ' · ส่งเข้าตรวจ'
+    : state.currentImage || 'ยังไม่ได้เลือกรูป';
+  el.saveBtn.disabled =
+    !hasProject || saving || !state.dirty || !editable || (reviewing ? false : !state.currentImage);
+  el.clearBoxes.disabled = !hasProject || !editable || state.boxes.length === 0;
 
-  const canManageClasses = hasProject && isProjectOwner(state.project);
+  const canManageClasses = hasProject && isProjectOwner(state.project) && !reviewing;
 
-  el.projectName.disabled = false;
+  el.projectName.disabled = !isTeacherAccount();
+  el.projectForm.hidden = !isTeacherAccount();
   el.className.disabled = !canManageClasses;
   el.classForm.querySelector('button').disabled = !canManageClasses;
   el.classForm.hidden = !canManageClasses;
   el.classOwnerHint.hidden = !hasProject || canManageClasses;
-  el.imageInput.disabled = !hasProject;
+  el.imageInput.disabled = !hasProject || reviewing || !isProjectOwner(state.project);
 
-  if (hasProject) {
+  if (hasProject && !reviewing) {
     el.exportLink.href = projectUrl('/export');
     el.exportLink.classList.remove('disabled');
     el.exportLink.removeAttribute('aria-disabled');
@@ -179,6 +207,13 @@ function renderToolbar() {
     el.trashLink.href = '/trash.html';
     el.trashLink.title = 'ดูถังขยะทุกรูปที่ถูกลบ';
   }
+  renderSubmissionBar();
+}
+
+// isTeacherAccount reports whether the signed-in user is staff. Students get a
+// read-only project sidebar and work through their submissions instead.
+function isTeacherAccount() {
+  return isTeacher(state.currentUser);
 }
 
 function renderProjects() {
@@ -292,6 +327,11 @@ function renderClasses() {
 }
 
 function renderImages() {
+  // In review mode the left list shows submissions instead of dataset images.
+  if (inSubmissionMode()) {
+    renderQueue();
+    return;
+  }
   el.imageList.innerHTML = '';
   el.imageEmpty.hidden = state.images.length > 0;
   el.imageEmpty.textContent = state.project
@@ -333,6 +373,74 @@ function renderImages() {
     }
     el.imageList.appendChild(li);
   });
+}
+
+const SUBMISSION_CLASS = {
+  draft: 'status-draft',
+  pending: 'status-pending',
+  approved: 'status-approved',
+  rejected: 'status-rejected',
+};
+
+// renderQueue lists the submissions a teacher is waiting on, or the student's
+// own photos, so the same canvas can walk through a queue by clicking.
+function renderQueue() {
+  el.imageList.innerHTML = '';
+  el.imageEmpty.hidden = state.queue.length > 0;
+  el.imageEmpty.textContent = state.queue.length
+    ? ''
+    : state.submission && state.submission.can_review
+      ? 'ไม่มีรูปรออนุมัติใน project นี้'
+      : 'คุณยังไม่ได้ส่งรูปเข้า project นี้';
+
+  state.queue.forEach((sub) => {
+    const li = document.createElement('li');
+    li.className = 'image-item' + (state.submission && state.submission.id === sub.id ? ' active' : '');
+
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'image-open';
+    open.textContent = sub.original_name || sub.image_name;
+    open.title =
+      `${sub.original_name || ''}\nสถานะ: ${SUBMISSION_LABELS[sub.status] || sub.status}\n` +
+      `นักศึกษา: ${sub.student_name || '-'}\nboxes: ${sub.box_count}` +
+      (sub.note ? `\nโน้ต: ${sub.note}` : '') +
+      (sub.review_note ? `\nเหตุผลที่ไม่ผ่าน: ${sub.review_note}` : '');
+    open.addEventListener('click', () => {
+      if (state.dirty && !confirm('มีการแก้ไขที่ยังไม่บันทึก ต้องการเปลี่ยนรูปหรือไม่?')) return;
+      openSubmission(projectId(), sub.id);
+    });
+    li.appendChild(open);
+
+    const chip = document.createElement('span');
+    chip.className = 'status-pill ' + (SUBMISSION_CLASS[sub.status] || '');
+    chip.textContent = String(sub.box_count);
+    chip.title = SUBMISSION_LABELS[sub.status] || sub.status;
+    li.appendChild(chip);
+
+    el.imageList.appendChild(li);
+  });
+}
+
+// loadQueue fills the queue for whoever is signed in. renderImages decides
+// whether the sidebar shows the queue or the dataset, so this is also safe to
+// call while the teacher is browsing images.
+async function loadQueue() {
+  if (!state.project) {
+    state.queue = [];
+    renderImages();
+    return;
+  }
+  try {
+    const data = await api(projectUrl('/submissions'));
+    state.queue = (data.submissions || []).filter(
+      (sub) => sub.status === 'pending' || sub.status === 'draft',
+    );
+  } catch (err) {
+    state.queue = [];
+    toast('โหลดคิวไม่สำเร็จ: ' + err.message, true);
+  }
+  renderImages();
 }
 
 function boxRect(box) {
@@ -472,6 +580,30 @@ function renderBoxList() {
 
 // ---------- project actions ----------
 
+// ---------- project actions ----------
+
+// projectFromDetail rebuilds the sidebar's project object from an API answer.
+// It lives in one place on purpose: dropping a field here used to break the
+// owner checks in the UI, so both loaders must share it.
+function projectFromDetail(data) {
+  return {
+    id: data.id,
+    name: data.name,
+    created_at: data.created_at,
+    owner_id: data.owner_id,
+    owner_username: data.owner_username,
+    owner_name: data.owner_name,
+    image_count: data.image_count,
+    box_count: data.box_count,
+    class_count: data.class_count,
+    submissions_open: data.submissions_open,
+    member_count: data.member_count,
+    pending_count: data.pending_count,
+    can_review: data.can_review,
+    can_submit: data.can_submit,
+  };
+}
+
 async function refreshProjects() {
   const data = await api('/api/projects');
   state.projects = data.projects || [];
@@ -489,17 +621,7 @@ async function refreshProjectData() {
   const data = await api(`/api/projects/${encodeURIComponent(id)}`);
   if (!state.project || state.project.id !== id) return;
 
-  state.project = {
-    id: data.id,
-    name: data.name,
-    created_at: data.created_at,
-    owner_id: data.owner_id,
-    owner_username: data.owner_username,
-    owner_name: data.owner_name,
-    image_count: data.image_count,
-    box_count: data.box_count,
-    class_count: data.class_count,
-  };
+  state.project = projectFromDetail(data);
   state.classes = data.classes || [];
   state.images = data.images || [];
 
@@ -525,6 +647,8 @@ function clearProject() {
   state.selected = -1;
   state.dirty = false;
   state.img = null;
+  state.submission = null;
+  state.queue = [];
   el.canvas.width = 0;
   el.canvas.height = 0;
   el.canvasWrap.classList.remove('has-image');
@@ -619,6 +743,8 @@ async function selectProject(id, force = false, imageName = '') {
   state.selected = -1;
   state.dirty = false;
   state.img = null;
+  state.submission = null;
+  state.queue = [];
   localStorage.setItem('lastProject', id);
   updateUrl(id, '');
 
@@ -637,17 +763,7 @@ async function selectProject(id, force = false, imageName = '') {
     const data = await api(`/api/projects/${encodeURIComponent(id)}`);
     if (token !== state.loadToken) return;
 
-    state.project = {
-      id: data.id,
-      name: data.name,
-      created_at: data.created_at,
-      owner_id: data.owner_id,
-      owner_username: data.owner_username,
-      owner_name: data.owner_name,
-      image_count: data.image_count,
-      box_count: data.box_count,
-      class_count: data.class_count,
-    };
+    state.project = projectFromDetail(data);
     state.classes = data.classes || [];
     state.images = data.images || [];
     state.activeClass = state.classes.length > 0 ? 0 : -1;
@@ -656,6 +772,7 @@ async function selectProject(id, force = false, imageName = '') {
     renderClasses();
     renderImages();
     renderToolbar();
+    await loadQueue();
 
     if (state.images.length > 0) {
       const wanted =
@@ -792,27 +909,38 @@ function clearCanvas() {
   el.placeholder.textContent = state.project
     ? 'อัปโหลดหรือเลือกรูปเพื่อเริ่มวาด'
     : 'สร้างหรือเลือก project ก่อน';
-  updateUrl(projectId(), '');
+  if (!state.submission) {
+    updateUrl(projectId(), '');
+  }
   renderImages();
   renderBoxList();
   renderToolbar();
 }
 
-function loadImage(name) {
+// loadImage takes a full URL so project images and staged submissions can share
+// the canvas code.
+function loadImage(url) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('โหลดรูปไม่สำเร็จ'));
-    img.src = projectUrl(`/images/${encodeURIComponent(name)}`);
+    img.src = url;
   });
+}
+
+function imageURL(name) {
+  return projectUrl(`/images/${encodeURIComponent(name)}`);
 }
 
 async function selectImage(name, force = false) {
   if (!state.project) return;
-  if (name === state.currentImage) return;
+  if (name === state.currentImage && !state.submission) return;
   if (!force && state.dirty && !confirm('มีการแก้ไขที่ยังไม่บันทึก ต้องการเปลี่ยนรูปหรือไม่?')) {
     return;
   }
+  // Switching to a dataset image leaves review mode behind.
+  state.submission = null;
+  renderSubmissionBar();
 
   const pid = projectId();
   const token = ++state.loadToken;
@@ -830,7 +958,7 @@ async function selectImage(name, force = false) {
   renderToolbar();
 
   try {
-    const img = await loadImage(name);
+    const img = await loadImage(imageURL(name));
     if (token !== state.loadToken || projectId() !== pid) return;
     state.img = img;
     el.canvas.width = img.naturalWidth;
@@ -858,10 +986,23 @@ async function selectImage(name, force = false) {
   }
 }
 
-async function saveLabels() {
-  if (!state.project || !state.currentImage || saving) return;
+// saveLabels stores boxes either on a dataset image (teacher) or on a pending
+// submission (student draft/pending). It returns true when the server accepted
+// the boxes, which the submit action relies on.
+async function saveLabels(quiet = false) {
+  if (saving) return false;
+  if (inSubmissionMode()) {
+    if (!isSubmissionEditable()) {
+      toast('รูปนี้ตรวจแล้ว แก้ไม่ได้', true);
+      return false;
+    }
+  } else if (!state.project || !state.currentImage) {
+    return false;
+  }
+
   const pid = projectId();
   const name = state.currentImage;
+  const subID = state.submission ? state.submission.id : '';
   saving = true;
   renderToolbar();
   el.saveBtn.textContent = 'กำลังบันทึก...';
@@ -877,18 +1018,31 @@ async function saveLabels() {
   };
 
   try {
-    await api(projectUrl(`/images/${encodeURIComponent(name)}/labels`), {
+    const url = subID
+      ? submissionUrl('/labels')
+      : projectUrl(`/images/${encodeURIComponent(name)}/labels`);
+    await api(url, {
       method: 'PUT',
       headers: JSON_HEADERS,
       body: jsonBody(payload),
     });
-    if (state.project && state.project.id === pid && state.currentImage === name) {
+    if (subID) {
+      if (state.submission && state.submission.id === subID) {
+        state.dirty = false;
+      }
+    } else if (state.project && state.project.id === pid && state.currentImage === name) {
       state.dirty = false;
     }
-    toast('บันทึก labels แล้ว');
-    await refreshProjectData();
+    if (!quiet) {
+      toast(subID ? 'บันทึกกรอบของ submission แล้ว' : 'บันทึก labels แล้ว');
+    }
+    if (!subID && !quiet) {
+      await refreshProjectData();
+    }
+    return true;
   } catch (err) {
     toast('บันทึกไม่สำเร็จ: ' + err.message, true);
+    return false;
   } finally {
     saving = false;
     el.saveBtn.textContent = 'บันทึก';
@@ -907,6 +1061,184 @@ function removeBox(index) {
   markDirty();
   renderBoxList();
   renderCanvas();
+}
+
+// ---------- submission review mode ----------
+
+const SUBMISSION_LABELS = {
+  draft: 'ฉบับร่าง',
+  pending: 'รออนุมัติ',
+  approved: 'อนุมัติแล้ว',
+  rejected: 'ไม่ผ่าน',
+};
+
+// openSubmission loads a student photo for annotation (author) or review
+// (teacher). The boxes live on the submission row until the teacher decides.
+async function openSubmission(projectID, sid, force = false) {
+  if (!force && state.submission && state.submission.id === sid) return;
+  if (!force && state.dirty && !confirm('มีการแก้ไขที่ยังไม่บันทึก ต้องการเปลี่ยนรูปหรือไม่?')) {
+    return;
+  }
+
+  const token = ++state.loadToken;
+  state.submission = null;
+  state.currentImage = null;
+  state.boxes = [];
+  state.selected = -1;
+  state.dirty = false;
+  state.img = null;
+  updateUrl(projectID, '', sid);
+  el.canvasWrap.classList.remove('has-image');
+  el.placeholder.hidden = false;
+  el.placeholder.textContent = 'กำลังโหลดรูปที่ต้องตรวจ...';
+  renderSubmissionBar();
+  renderToolbar();
+  renderImages();
+
+  try {
+    const detail = await api(`/api/projects/${encodeURIComponent(projectID)}/submissions/${encodeURIComponent(sid)}`);
+    if (token !== state.loadToken) return;
+    const sub = detail.submission || {};
+    state.submission = {
+      id: sub.id,
+      status: sub.status,
+      note: sub.note || '',
+      original_name: sub.original_name || sub.image_name,
+      student_name: sub.student_name || '',
+      submitted_at: sub.submitted_at,
+      review_note: sub.review_note || '',
+      reviewer_name: sub.reviewer_name || '',
+      can_edit: Boolean(detail.can_edit),
+      can_review: Boolean(detail.can_review),
+    };
+
+    const img = await loadImage(submissionUrl('/image'));
+    if (token !== state.loadToken) return;
+    state.img = img;
+    el.canvas.width = img.naturalWidth;
+    el.canvas.height = img.naturalHeight;
+    el.canvasWrap.classList.add('has-image');
+    el.placeholder.hidden = true;
+    state.boxes = (sub.labels || []).map((l) => ({ ...l }));
+    renderCanvas();
+    renderBoxList();
+    renderSubmissionBar();
+    renderToolbar();
+    await loadQueue();
+  } catch (err) {
+    if (token !== state.loadToken) return;
+    toast('เปิด submission ไม่สำเร็จ: ' + err.message, true);
+    clearCanvas();
+    renderSubmissionBar();
+  }
+}
+
+// leaveSubmissionMode returns the canvas to normal project images.
+function leaveSubmissionMode() {
+  if (!state.submission) return;
+  state.submission = null;
+  updateUrl(projectId(), '');
+  el.canvasWrap.classList.remove('has-image');
+  el.placeholder.hidden = false;
+  el.placeholder.textContent = 'เลือกรูปจาก list ทางซ้าย';
+  renderSubmissionBar();
+  renderImages();
+}
+
+function renderSubmissionBar() {
+  const sub = state.submission;
+  el.submissionBar.hidden = !sub;
+  if (!sub) {
+    el.submissionSubmit.hidden = true;
+    el.submissionWithdraw.hidden = true;
+    el.submissionApprove.hidden = true;
+    el.submissionReject.hidden = true;
+    return;
+  }
+
+  const label = SUBMISSION_LABELS[sub.status] || sub.status;
+  el.submissionStatus.textContent = label;
+  el.submissionStatus.className = 'chip status-' + sub.status;
+
+  const bits = [sub.original_name];
+  if (sub.student_name) bits.push('นักศึกษา: ' + sub.student_name);
+  if (sub.note) bits.push('โน้ต: ' + sub.note);
+  if (sub.status === 'rejected') bits.push('เหตุผล: ' + (sub.review_note || '-'));
+  el.submissionMeta.textContent = bits.join(' · ');
+
+  const authorSide = !sub.can_review;
+  const canSend = authorSide && sub.can_edit && (sub.status === 'draft' || sub.status === 'rejected');
+  el.submissionSubmit.hidden = !canSend;
+  el.submissionSubmit.textContent = sub.status === 'rejected' ? 'ส่งใหม่อีกครั้ง' : 'ส่งอนุมัติ';
+  el.submissionWithdraw.hidden = !(authorSide && sub.status === 'pending');
+  el.submissionApprove.hidden = !(sub.can_review && sub.status === 'pending');
+  el.submissionReject.hidden = !(sub.can_review && sub.status === 'pending');
+
+  el.submissionBack.href = sub.can_review
+    ? `/pending.html?project=${encodeURIComponent(projectId())}`
+    : '/mywork.html';
+  el.submissionBack.textContent = sub.can_review ? '← กลับไปคิวตรวจ' : '← กลับไปงานของฉัน';
+
+  if (!sub.can_edit && sub.status === 'approved') {
+    el.placeholder.textContent = 'รูปนี้ตรวจแล้ว อ่านอย่างเดียว';
+  }
+}
+
+async function submissionAction(kind) {
+  const sub = state.submission;
+  if (!sub) return;
+
+  if (kind === 'reject') {
+    const note = prompt('เหตุผลที่ไม่ผ่าน (นักศึกษาจะเห็นข้อความนี้)', '');
+    if (note === null) return;
+    if (!note.trim()) {
+      toast('ต้องระบุเหตุผลเมื่อไม่ผ่าน', true);
+      return;
+    }
+    await runSubmission(kind, note.trim());
+    return;
+  }
+  if (kind === 'approve') {
+    if (!confirm(`อนุมัติ "${sub.original_name}" เข้า dataset ของ project นี้?`)) return;
+    await runSubmission(kind, '');
+    return;
+  }
+
+  // Draft edits must be on the server before the photo can be sent.
+  if (kind === 'submit' && state.dirty) {
+    const saved = await saveLabels(true);
+    if (!saved) return;
+  }
+  await runSubmission(kind, '');
+}
+
+async function runSubmission(kind, note) {
+  const sub = state.submission;
+  try {
+    await api(submissionUrl('/' + kind), {
+      method: 'POST',
+      headers: note === undefined ? undefined : JSON_HEADERS,
+      body: note === undefined ? undefined : jsonBody({ note }),
+    });
+    const messages = {
+      submit: 'ส่งให้อาจารย์ตรวจแล้ว',
+      withdraw: 'ดึงกลับมาเป็นฉบับร่างแล้ว',
+      approve: 'อนุมัติแล้ว รูปเข้า project พร้อมกรอบที่วาดไว้',
+      reject: 'ไม่ผ่าน รูปและกรอบถูกย้ายไปถังขยะของ project',
+    };
+    toast(messages[kind] || 'เรียบร้อย');
+    if (kind === 'approve' || kind === 'reject') {
+      await refreshProjectData();
+      leaveSubmissionMode();
+      if (state.project) {
+        await loadQueue();
+      }
+      return;
+    }
+    await openSubmission(projectId(), sub.id, true);
+  } catch (err) {
+    toast('ทำไม่สำเร็จ: ' + err.message, true);
+  }
 }
 
 // ---------- canvas interaction ----------
@@ -933,6 +1265,10 @@ function hitTest(p) {
 function onPointerDown(e) {
   if (!state.project) {
     toast('สร้างหรือเลือก project ก่อน', true);
+    return;
+  }
+  if (inSubmissionMode() && !isSubmissionEditable()) {
+    toast('รูปนี้ถูกตรวจไปแล้ว จึงแก้กรอบไม่ได้', true);
     return;
   }
   if (!state.img || e.button !== 0) return;
@@ -1128,22 +1464,51 @@ window.addEventListener('beforeunload', (e) => {
 
 // ---------- boot ----------
 
+function wireSubmissionBar() {
+  el.submissionSubmit.addEventListener('click', () => submissionAction('submit'));
+  el.submissionWithdraw.addEventListener('click', () => submissionAction('withdraw'));
+  el.submissionApprove.addEventListener('click', () => submissionAction('approve'));
+  el.submissionReject.addEventListener('click', () => submissionAction('reject'));
+}
+
+// boot resolves the session first, because what this page may do depends on
+// the role: teachers edit dataset images and review, students draw on their own
+// submissions.
 (async function boot() {
   try {
-    state.currentUser = await initUserSelect(el.userSelect);
+    state.currentUser = await fetchMe();
+    if (!state.currentUser) return;
+    renderIdentity(state.currentUser, el);
+    wireSubmissionBar();
+
     await refreshProjects();
     const params = new URLSearchParams(window.location.search);
     const wantedProject = params.get('project') || '';
     const wantedImage = params.get('image') || '';
+    const wantedSubmission = params.get('submission') || '';
     const last = localStorage.getItem('lastProject');
     const project =
       state.projects.find((p) => p.id === wantedProject) ||
       state.projects.find((p) => p.id === last) ||
       state.projects[0];
-    if (project) {
-      await selectProject(project.id, true, wantedImage);
-    } else {
+
+    if (!project) {
       clearProject();
+      el.placeholder.textContent = isStudent(state.currentUser)
+        ? 'ยังไม่มี project ที่เปิดรับรูปจากคุณ ให้อาจารย์เพิ่มคุณเข้า project ก่อน'
+        : 'ยังไม่มี project สร้างอันแรกเพื่อเก็บรูปและ label ไว้ด้วยกัน';
+      return;
+    }
+
+    await selectProject(project.id, true, wantedSubmission ? '' : wantedImage);
+    if (wantedSubmission) {
+      await openSubmission(project.id, wantedSubmission, true);
+      return;
+    }
+    if (isStudent(state.currentUser)) {
+      // Students only ever draw on submissions, and every entry point passes a
+      // submission id. Without one, their own page is the right destination.
+      window.location.replace('/mywork.html');
     }
   } catch (err) {
     toast('โหลดข้อมูลไม่สำเร็จ: ' + err.message, true);

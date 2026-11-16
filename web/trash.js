@@ -13,27 +13,14 @@ const el = {
   groups: document.getElementById('trash-groups'),
   empty: document.getElementById('trash-empty'),
   toast: document.getElementById('toast'),
-  userSelect: document.getElementById('user-select'),
+  identity: document.getElementById('identity'),
+  logout: document.getElementById('logout-btn'),
 };
 
 let toastTimer = 0;
 
-async function api(path, options) {
-  const res = await userFetch(path, options);
-  const text = await res.text();
-  let data = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = null;
-    }
-  }
-  if (!res.ok) {
-    throw new Error((data && data.error) || text || res.statusText);
-  }
-  return data;
-}
+// api() lives in common.js: it adds the CSRF header and redirects to the login
+// page when the session expires.
 
 function toast(text, isError = false) {
   el.toast.textContent = text;
@@ -44,12 +31,7 @@ function toast(text, isError = false) {
   }, 3400);
 }
 
-function fmtDate(value) {
-  if (!value) return '';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
-}
+// fmtDate comes from common.js.
 
 function encodeName(name) {
   return encodeURIComponent(name);
@@ -67,11 +49,11 @@ function isOwner(project) {
   return Boolean(state.currentUser && project.owner_id === state.currentUser.id);
 }
 
-// Restore is allowed for the owner or the user who uploaded the image, matching
-// the API rule. Purging is owner-only because it is irreversible.
-function canRestore(project, image) {
-  if (!state.currentUser) return false;
-  return isOwner(project) || image.uploaded_by === state.currentUser.id;
+// Restoring and purging are both owner-only now: a student whose rejected photo
+// sits in the trash must send a new submission instead of putting work back into
+// the dataset by themselves.
+function canRestore(project) {
+  return isOwner(project);
 }
 
 function matchesQuery(project, image) {
@@ -137,7 +119,7 @@ function renderCard(project, image) {
   const actions = document.createElement('div');
   actions.className = 'trash-actions';
 
-  if (canRestore(project, image)) {
+  if (canRestore(project)) {
     actions.appendChild(
       makeButton('กู้คืน', 'primary-btn small', () => restoreImage(project, image), 'นำรูปกลับเข้า project'),
     );
@@ -265,8 +247,13 @@ el.search.addEventListener('input', () => {
 const params = new URLSearchParams(window.location.search);
 state.filterProject = params.get('project') || '';
 
+// boot resolves the session first: the trash a person sees depends on their
+// role, because the server only returns what the caller may act on.
 (async function boot() {
-  state.currentUser = await initUserSelect(el.userSelect);
+  state.currentUser = await requireUser();
+  if (!state.currentUser) return;
+  renderIdentity(state.currentUser, el);
+
   if (state.filterProject) {
     const data = await api('/api/projects/' + encodeURIComponent(state.filterProject)).catch(() => null);
     if (data && data.name) {
